@@ -24,7 +24,7 @@ import zlib
 from typing import cast
 
 import pytest
-from pypdf import PdfWriter
+from pypdf import PdfWriter, apply_configuration
 from pypdf.generic import (
     ArrayObject,
     DecodedStreamObject,
@@ -234,6 +234,111 @@ def test_complete_filtered_content_preserves_text_through_stream_arrays_and_form
     assert len(pages) == 2
     assert pages[0].text == "Valid first page"
     assert pages[1].text.strip() == "Revenue 123 and operating income 45"
+
+
+def _run_length_literals(data: bytes, width: int = 128) -> bytes:
+    runs = []
+    for start in range(0, len(data), width):
+        chunk = data[start : start + width]
+        runs.append(bytes([len(chunk) - 1]) + chunk)
+    return b"".join(runs) + b"\x80"
+
+
+def _encode_pdf_filters(data: bytes, filters: tuple[str, ...], *, missing_run_length_eod: bool = False) -> bytes:
+    for filter_name in reversed(filters):
+        if filter_name == "/ASCII85Decode":
+            data = base64.a85encode(data, adobe=True)
+        elif filter_name == "/FlateDecode":
+            data = zlib.compress(data)
+        else:
+            data = _run_length_literals(data)
+            if missing_run_length_eod:
+                data = data[:-1]
+                missing_run_length_eod = False
+    return data
+
+
+@pytest.mark.parametrize("form_depth,split_streams", [(0, False), (0, True), (2, False)])
+@pytest.mark.parametrize("damage", ["literal", "repeat", "eod", "empty"])
+def test_damaged_run_length_later_page_fails_without_partial_pages(
+    form_depth: int, split_streams: bool, damage: str
+) -> None:
+    raw = b"BT /F1 12 Tf 10 100 Td (Revenue 123 and operating income 45) Tj ET"
+    literal = bytes([len(raw) - 1]) + raw
+    broken = {
+        "literal": bytes([len(raw) + 12]) + raw + b"\x80",
+        "repeat": literal + b"\xff",
+        "eod": literal,
+        "empty": b"",
+    }[damage]
+    content = _filtered_later_page(broken, ("/RunLengthDecode",), form_depth=form_depth, split_streams=split_streams)
+    with pytest.raises(ValueError):
+        parse_pdf_document(PDFDocumentInput(document_id="corrupt-run-length", content=content))
+
+
+@pytest.mark.parametrize(
+    "filters",
+    [
+        ("/RunLengthDecode",),
+        ("/RL",),
+        ("/ASCII85Decode", "/RunLengthDecode"),
+        ("/FlateDecode", "/RunLengthDecode"),
+        ("/RunLengthDecode", "/FlateDecode"),
+        ("/FlateDecode", "/RunLengthDecode", "/ASCII85Decode"),
+        ("/RunLengthDecode", "/ASCII85Decode", "/FlateDecode"),
+        ("/ASCII85Decode", "/RunLengthDecode", "/FlateDecode", "/RunLengthDecode"),
+    ],
+)
+@pytest.mark.parametrize("damaged", [False, True])
+def test_run_length_layers_in_filter_chains_require_complete_encoding(filters: tuple[str, ...], damaged: bool) -> None:
+    raw = b"BT /F1 12 Tf 10 100 Td (Revenue 123 and operating income 45) Tj ET"
+    content = _filtered_later_page(_encode_pdf_filters(raw, filters, missing_run_length_eod=damaged), filters)
+    if damaged:
+        with pytest.raises(ValueError):
+            parse_pdf_document(PDFDocumentInput(document_id="filter-chain", content=content))
+    else:
+        pages = parse_pdf_document(PDFDocumentInput(document_id="filter-chain", content=content))
+        assert pages[1].text == "Revenue 123 and operating income 45"
+
+
+@pytest.mark.parametrize("width", [1, 128])
+def test_complete_run_length_literal_boundaries_preserve_the_entire_page(width: int) -> None:
+    text = "Revenue " + "A" * 150 + " 123"
+    raw = f"BT /F1 12 Tf 10 100 Td ({text}) Tj ET".encode()
+    content = _filtered_later_page(_run_length_literals(raw, width), ("/RunLengthDecode",))
+    pages = parse_pdf_document(PDFDocumentInput(document_id="literal-boundary", content=content))
+    assert pages[1].text == text
+
+
+@pytest.mark.parametrize("length", [2, 128])
+def test_complete_run_length_repeat_boundaries_preserve_the_entire_page(length: int) -> None:
+    before = b"BT /F1 12 Tf 10 100 Td (Revenue "
+    after = b" 123) Tj ET"
+    data = _run_length_literals(before)[:-1] + bytes([257 - length]) + b"A" + _run_length_literals(after)
+    content = _filtered_later_page(data, ("/RunLengthDecode",))
+    pages = parse_pdf_document(PDFDocumentInput(document_id="repeat-boundary", content=content))
+    assert pages[1].text == "Revenue " + "A" * length + " 123"
+
+
+def test_empty_run_length_stream_preserves_a_blank_physical_page() -> None:
+    content = _filtered_later_page(b"\x80", ("/RunLengthDecode",))
+    pages = parse_pdf_document(PDFDocumentInput(document_id="empty-run-length", content=content))
+    assert len(pages) == 2
+    assert pages[1].text == ""
+
+
+def test_run_length_decoding_preserves_the_configured_output_budget() -> None:
+    raw = b"BT /F1 12 Tf 10 100 Td (Revenue 123) Tj ET"
+    content = _filtered_later_page(_run_length_literals(raw), ("/RunLengthDecode",))
+    with apply_configuration(run_length_maximum_output_length=len(raw), disable_legacy_handling=True):
+        pages = parse_pdf_document(PDFDocumentInput(document_id="run-length-budget", content=content))
+        assert pages[1].text == "Revenue 123"
+    for limit in (0, len(raw) - 1):
+        with (
+            apply_configuration(run_length_maximum_output_length=limit, disable_legacy_handling=True),
+            pytest.raises(ValueError),
+        ):
+            parse_pdf_document(PDFDocumentInput(document_id="run-length-budget", content=content))
 
 
 @pytest.mark.parametrize("inherited", [False, True])

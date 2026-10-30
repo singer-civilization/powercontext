@@ -197,8 +197,8 @@ def _validate_content(
 
 def _content_operations(content: PdfObject | None, page: PageObject) -> Iterator[tuple[list[PdfObject], bytes]]:
     # pypdf treats a malformed /Contents scalar as an empty page even in strict
-    # mode. Its Flate decoder can also recover only part of a damaged stream,
-    # and its text extractor suppresses exceptions from nested Form objects.
+    # mode. Its Flate and RunLength decoders can also recover only part of a
+    # damaged stream, and its text extractor suppresses errors in nested Forms.
     # Validate these evidence-bearing streams before accepting a whole page.
     if content is None:
         return
@@ -212,12 +212,12 @@ def _content_operations(content: PdfObject | None, page: PageObject) -> Iterator
             continue
         if not isinstance(stream, StreamObject):
             raise TypeError("PDF page Contents must contain streams")  # noqa: TRY003
-        _validate_flate_stream(stream)
+        _validate_encoded_stream(stream)
 
     yield from ContentStream(content, page.pdf).operations
 
 
-def _validate_flate_stream(stream: StreamObject) -> None:
+def _validate_encoded_stream(stream: StreamObject) -> None:
     filters = stream.get("/Filter", ArrayObject()).get_object()
     if isinstance(filters, NullObject):
         return
@@ -227,7 +227,8 @@ def _validate_flate_stream(stream: StreamObject) -> None:
     if parameters is not None:
         parameters = parameters.get_object()
     for index, filter_name in enumerate(filters):
-        if filter_name.get_object() not in ("/FlateDecode", "/Fl"):
+        filter_name = filter_name.get_object()
+        if filter_name not in ("/FlateDecode", "/Fl", "/RunLengthDecode", "/RL"):
             continue
         # Decode any preceding layers through pypdf, including their predictor
         # parameters. Check the compressed bytes before its recovery fallback.
@@ -238,7 +239,36 @@ def _validate_flate_stream(stream: StreamObject) -> None:
             prefix[NameObject("/DecodeParms")] = ArrayObject(parameters[:index])
         elif parameters is not None:
             prefix[NameObject("/DecodeParms")] = parameters
-        _validate_deflate(decode_stream_data(prefix))
+        data = decode_stream_data(prefix)
+        if filter_name in ("/RunLengthDecode", "/RL"):
+            _validate_run_length(data)
+        else:
+            _validate_deflate(data)
+
+
+def _validate_run_length(data: bytes) -> None:
+    position = 0
+    output_length = 0
+    output_limit = get_configuration().run_length_maximum_output_length
+    # Walk encoded runs and count output bytes without constructing another
+    # decompressed copy. A literal byte equal to 128 is not an EOD marker.
+    while position < len(data):
+        control = data[position]
+        position += 1
+        if control == 128:
+            return
+        if control < 128:
+            length = control + 1
+            position += length
+        else:
+            length = 257 - control
+            position += 1
+        if position > len(data):
+            raise ValueError("PDF RunLength content has an incomplete run")  # noqa: TRY003
+        output_length += length
+        if output_length > output_limit:
+            raise ValueError("PDF RunLength content exceeds the parser limit")  # noqa: TRY003
+    raise ValueError("PDF RunLength content is missing its end marker")  # noqa: TRY003
 
 
 def _validate_deflate(data: bytes) -> None:
