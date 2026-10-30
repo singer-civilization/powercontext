@@ -19,11 +19,14 @@ from __future__ import annotations
 import hashlib
 import io
 import json
-from typing import Annotated, Literal
+import zlib
+from collections.abc import Iterator
+from typing import Annotated, Literal, cast
 
 from pydantic import BaseModel, Field, field_validator, model_validator
-from pypdf import PageObject, PdfReader
-from pypdf.generic import ArrayObject, NullObject, StreamObject
+from pypdf import PageObject, PdfReader, get_configuration
+from pypdf.filters import decode_stream_data
+from pypdf.generic import ArrayObject, ContentStream, DictionaryObject, NameObject, NullObject, PdfObject, StreamObject
 
 from powercontext.sources.definitions import AdapterSourceDefinition, SourceDefinition
 from powercontext.sources.models import Source, SourceMaterialization
@@ -101,15 +104,102 @@ def parse_pdf_document(value: PDFDocumentInput) -> tuple[PDFPageInput, ...]:
 
 
 def _page_text(page: PageObject) -> str:
-    # pypdf treats a malformed /Contents scalar as an empty page even in strict
-    # mode. Distinguish a real blank page from an unreadable content container.
-    content = page.get("/Contents")
-    if content is not None:
-        content = content.get_object()
-        streams = content if isinstance(content, ArrayObject) else (content,)
-        if any(not isinstance(stream.get_object(), (StreamObject, NullObject)) for stream in streams):
-            raise ValueError("PDF page Contents must contain streams")  # noqa: TRY003
+    resources = cast(DictionaryObject, page.get("/Resources", DictionaryObject()).get_object())
+    _validate_content(page.get("/Contents"), page, resources, set(), set())
     return page.extract_text() or ""
+
+
+def _validate_content(
+    content: PdfObject | None,
+    page: PageObject,
+    resources: DictionaryObject,
+    ancestors: set[int],
+    validated_forms: set[int],
+) -> None:
+    for operands, operator in _content_operations(content, page):
+        if operator != b"Do":
+            continue
+        xobjects = cast(DictionaryObject, resources["/XObject"].get_object())
+        xobject = cast(StreamObject, xobjects[operands[0]].get_object())
+        if xobject.get("/Subtype") != "/Form":
+            continue
+        identity = id(xobject)
+        if identity in ancestors:
+            raise ValueError("PDF Form content must not be cyclic")  # noqa: TRY003
+        if identity in validated_forms:
+            continue
+        _validate_content(
+            xobject,
+            page,
+            cast(DictionaryObject, xobject.get("/Resources", resources).get_object()),
+            ancestors | {identity},
+            validated_forms,
+        )
+        validated_forms.add(identity)
+
+
+def _content_operations(content: PdfObject | None, page: PageObject) -> Iterator[tuple[list[PdfObject], bytes]]:
+    # pypdf treats a malformed /Contents scalar as an empty page even in strict
+    # mode. Its Flate decoder can also recover only part of a damaged stream,
+    # and its text extractor suppresses exceptions from nested Form objects.
+    # Validate these evidence-bearing streams before accepting a whole page.
+    if content is None:
+        return
+    content = content.get_object()
+    if content is None or isinstance(content, NullObject):
+        return
+    streams = content if isinstance(content, ArrayObject) else (content,)
+    for reference in streams:
+        stream = reference.get_object()
+        if isinstance(stream, NullObject):
+            continue
+        if not isinstance(stream, StreamObject):
+            raise TypeError("PDF page Contents must contain streams")  # noqa: TRY003
+        _validate_flate_stream(stream)
+
+    yield from ContentStream(content, page.pdf).operations
+
+
+def _validate_flate_stream(stream: StreamObject) -> None:
+    filters = stream.get("/Filter", ArrayObject()).get_object()
+    if isinstance(filters, NullObject):
+        return
+    if not isinstance(filters, ArrayObject):
+        filters = ArrayObject([filters])
+    parameters = stream.get("/DecodeParms")
+    if parameters is not None:
+        parameters = parameters.get_object()
+    for index, filter_name in enumerate(filters):
+        if filter_name.get_object() not in ("/FlateDecode", "/Fl"):
+            continue
+        # Decode any preceding layers through pypdf, including their predictor
+        # parameters. Check the compressed bytes before its recovery fallback.
+        prefix = StreamObject()
+        prefix._data = stream._data  # pypdf exposes no raw stream-data accessor.
+        prefix[NameObject("/Filter")] = ArrayObject(filters[:index])
+        if isinstance(parameters, ArrayObject):
+            prefix[NameObject("/DecodeParms")] = ArrayObject(parameters[:index])
+        elif parameters is not None:
+            prefix[NameObject("/DecodeParms")] = parameters
+        _validate_deflate(decode_stream_data(prefix))
+
+
+def _validate_deflate(data: bytes) -> None:
+    decoder = zlib.decompressobj()
+    output_limit = get_configuration().zlib_maximum_output_length
+    output_length = 0
+    # Discard decoded chunks: this check must not allocate an unbounded second
+    # copy of the page's content stream before pypdf extracts its text.
+    for start in range(0, len(data), 65_536):
+        pending = data[start : start + 65_536]
+        while pending:
+            output_length += len(decoder.decompress(pending, 65_536))
+            if output_limit and output_length > output_limit:
+                raise ValueError("PDF compressed content exceeds the parser limit")  # noqa: TRY003
+            if decoder.eof:
+                return
+            pending = decoder.unconsumed_tail
+    raise ValueError("PDF compressed content is incomplete")  # noqa: TRY003
 
 
 def _document_id(value: str) -> str:

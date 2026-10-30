@@ -17,12 +17,24 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import hashlib
 import io
+import zlib
+from typing import cast
 
 import pytest
 from pypdf import PdfWriter
-from pypdf.generic import DecodedStreamObject, DictionaryObject, NameObject, TextStringObject
+from pypdf.generic import (
+    ArrayObject,
+    DecodedStreamObject,
+    DictionaryObject,
+    EncodedStreamObject,
+    NameObject,
+    NullObject,
+    NumberObject,
+    TextStringObject,
+)
 
 from powercontext.sources import (
     TEXT_EVIDENCE_PROJECTION_KEY,
@@ -69,6 +81,52 @@ def _pdf(texts: tuple[str | None, ...], *, password: str | None = None) -> bytes
 def _broken_later_page() -> bytes:
     writer = PdfWriter(clone_from=io.BytesIO(_pdf(("valid first page", "invalid second page"))))
     writer.pages[1][NameObject("/Contents")] = TextStringObject("not a content stream")
+    output = io.BytesIO()
+    writer.write(output)
+    return output.getvalue()
+
+
+def _filtered_later_page(
+    content: bytes,
+    filters: tuple[str, ...] = ("/FlateDecode",),
+    *,
+    form_depth: int = 0,
+    split_streams: bool = False,
+) -> bytes:
+    writer = PdfWriter(clone_from=io.BytesIO(_pdf(("Valid first page", "original second page"))))
+    page = writer.pages[1]
+    resources = page["/Resources"]
+    stream = EncodedStreamObject()
+    stream._data = content
+    stream[NameObject("/Filter")] = ArrayObject([NameObject(name) for name in filters])
+    stream[NameObject("/DecodeParms")] = ArrayObject([NullObject() for _ in filters])
+    for depth in range(form_depth):
+        stream[NameObject("/Type")] = NameObject("/XObject")
+        stream[NameObject("/Subtype")] = NameObject("/Form")
+        stream[NameObject("/BBox")] = ArrayObject([
+            NumberObject(0),
+            NumberObject(0),
+            NumberObject(300),
+            NumberObject(300),
+        ])
+        stream[NameObject("/Resources")] = resources
+        name = NameObject(f"/Form{depth}")
+        resources = DictionaryObject({NameObject("/XObject"): DictionaryObject({name: writer._add_object(stream)})})
+        stream = DecodedStreamObject()
+        stream.set_data(f"{name} Do".encode())
+    page[NameObject("/Resources")] = resources
+    if split_streams:
+        prefix = DecodedStreamObject()
+        prefix.set_data(b"q\n")
+        suffix = DecodedStreamObject()
+        suffix.set_data(b"\nQ")
+        page[NameObject("/Contents")] = ArrayObject([
+            writer._add_object(prefix),
+            writer._add_object(stream),
+            writer._add_object(suffix),
+        ])
+    else:
+        page[NameObject("/Contents")] = writer._add_object(stream)
     output = io.BytesIO()
     writer.write(output)
     return output.getvalue()
@@ -141,6 +199,64 @@ def test_empty_password_permissions_are_readable_but_non_empty_passwords_are_rej
 def test_incomplete_or_invalid_documents_fail_without_partial_pages(content: bytes) -> None:
     with pytest.raises(ValueError):
         parse_pdf_document(PDFDocumentInput(document_id="corrupt", content=content))
+
+
+@pytest.mark.parametrize("form_depth", [0, 2])
+@pytest.mark.parametrize("broken", [b"not a zlib stream", zlib.compress(b"BT /F1 12 Tf (Partial evidence) Tj ET")[:-4]])
+def test_damaged_compressed_later_page_fails_atomically(broken: bytes, form_depth: int) -> None:
+    with pytest.raises(ValueError):
+        parse_pdf_document(
+            PDFDocumentInput(
+                document_id="corrupt-compression", content=_filtered_later_page(broken, form_depth=form_depth)
+            )
+        )
+
+
+def test_invalid_form_content_is_not_silently_omitted_from_an_accepted_document() -> None:
+    content = _filtered_later_page(zlib.compress(b"BT /F1 12 Tf (unterminated literal"), form_depth=2)
+    with pytest.raises(ValueError):
+        parse_pdf_document(PDFDocumentInput(document_id="corrupt-form", content=content))
+
+
+@pytest.mark.parametrize("form_depth", [0, 1, 2])
+@pytest.mark.parametrize("split_streams", [False, True])
+def test_complete_filtered_content_preserves_text_through_stream_arrays_and_forms(
+    form_depth: int, split_streams: bool
+) -> None:
+    raw = b"BT /F1 12 Tf 10 100 Td (Revenue 123 and operating income 45) Tj ET"
+    content = _filtered_later_page(
+        base64.a85encode(zlib.compress(raw), adobe=True),
+        ("/ASCII85Decode", "/FlateDecode"),
+        form_depth=form_depth,
+        split_streams=split_streams,
+    )
+    pages = parse_pdf_document(PDFDocumentInput(document_id="complete", content=content))
+    assert len(pages) == 2
+    assert pages[0].text == "Valid first page"
+    assert pages[1].text.strip() == "Revenue 123 and operating income 45"
+
+
+@pytest.mark.parametrize("inherited", [False, True])
+def test_form_text_with_indirect_or_inherited_page_resources_is_preserved(inherited: bool) -> None:
+    raw = b"BT /F1 12 Tf 10 100 Td (Revenue 123 and operating income 45) Tj ET"
+    writer = PdfWriter(clone_from=io.BytesIO(_filtered_later_page(zlib.compress(raw), form_depth=2)))
+    page = writer.pages[1]
+
+    def make_indirect_resources(obj: DictionaryObject) -> None:
+        resources = cast(DictionaryObject, obj["/Resources"])
+        xobjects = cast(DictionaryObject, resources.get("/XObject", DictionaryObject()))
+        for form in xobjects.values():
+            make_indirect_resources(cast(DictionaryObject, form.get_object()))
+        obj[NameObject("/Resources")] = writer._add_object(resources)
+
+    make_indirect_resources(page)
+    if inherited:
+        cast(DictionaryObject, page["/Parent"])[NameObject("/Resources")] = page.raw_get("/Resources")
+        del page["/Resources"]
+    output = io.BytesIO()
+    writer.write(output)
+    pages = parse_pdf_document(PDFDocumentInput(document_id="indirect-resources", content=output.getvalue()))
+    assert pages[1].text.strip() == "Revenue 123 and operating income 45"
 
 
 @pytest.mark.parametrize("document_id", ["", " ", "\n\t", "\u3000"])

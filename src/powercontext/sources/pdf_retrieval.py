@@ -249,6 +249,50 @@ _CONCEPTS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ),
 )
 
+_DOCUMENT_WORDS = frozenset({
+    "annual",
+    "report",
+    "form",
+    "10k",
+    "10q",
+    "20f",
+    "40f",
+    "k",
+    "q",
+    "f",
+    "inc",
+    "incorporated",
+    "corp",
+    "corporation",
+    "company",
+    "co",
+    "ltd",
+    "limited",
+    "plc",
+    "holding",
+    "group",
+})
+_HEADING_PREFIX = r"(?im)^\s*(?:(?:consolidated|condensed|combined|unaudited|audited)\s+)*"
+# Anchored headings distinguish a statement itself from notes discussing it.
+# These roles are derived from original page text, never from page-number lists.
+_STATEMENT_PATTERNS = {
+    "income": _HEADING_PREFIX + r"(?:statements?\s+of\s+(?:income|operations|earnings|profit(?:\s+and\s+loss)?)|"
+    r"(?:income|profit\s+and\s+loss)\s+statements?)\b",
+    "cashflow": _HEADING_PREFIX + r"(?:statements?\s+of\s+cash\s+flows?|cash\s+flow\s+statements?)\b",
+    "balance": _HEADING_PREFIX + r"(?:balance\s+sheets?|statements?\s+of\s+financial\s+position)\b",
+    "equity": _HEADING_PREFIX + r"statements?\s+of\s+(?:changes\s+in\s+)?(?:stockholders|shareholders|owners|equity)\b",
+    "comprehensive": _HEADING_PREFIX + r"statements?\s+of\s+(?:other\s+)?comprehensive\s+income\b",
+}
+_STATEMENT_QUESTIONS = {
+    "income": r"\b(?:ebitda|ebit|operating\s+(?:income|profits?)|(?:gross|net|profit)\s+margin|"
+    r"income\s+statements?|statements?\s+of\s+(?:income|operations|earnings)|p\s*&\s*l|profit\s+and\s+loss)\b",
+    "cashflow": r"\b(?:ebitda|cash\s*flows?|capex|capital\s+expenditur\w*|depreciat\w*|amorti[sz]\w*|d\s*&\s*a)\b",
+    "balance": r"\b(?:balance\s+sheets?|financial\s+position|current\s+ratio|quick\s+ratio|working\s+capital|"
+    r"total\s+(?:assets|liabilities)|debt\s+to\s+equity)\b",
+    "equity": r"\bstatements?\s+of\s+(?:changes\s+in\s+)?(?:stockholders|shareholders|owners|equity)\b",
+    "comprehensive": r"\b(?:other\s+comprehensive\s+income|comprehensive\s+income\s+statements?)\b",
+}
+
 
 @dataclass(frozen=True)
 class _Page:
@@ -257,7 +301,8 @@ class _Page:
     terms: Counter[str]
     tokens: tuple[str, ...]
     normalized_text: str
-    document_terms: frozenset[str]
+    document_id: str
+    statements: dict[str, int]
 
 
 def _stem(term: str) -> str:
@@ -299,6 +344,70 @@ def _query(question: str) -> tuple[dict[str, float], tuple[dict[str, float], ...
     return weights, tuple(facets), tuple(phrases)
 
 
+def _statement_headings(text: str) -> dict[str, int]:
+    heading = unicodedata.normalize("NFKC", "\n".join(text.splitlines()[:35]))
+    roles = {}
+    for role, pattern in _STATEMENT_PATTERNS.items():
+        for match in re.finditer(pattern, heading):
+            remainder = heading[match.end() :]
+            # Contents listings carry dot leaders or an isolated physical/
+            # printed page reference. A repeated "Table of Contents" link at
+            # the top of a genuine statement does not make it a contents page.
+            if re.match(r"[ \t]*\.{2,}", remainder) or re.match(r"[ \t]*(?:\n[ \t]*)?\d{1,3}[ \t]*(?:\n|$)", remainder):
+                continue
+            title = match.group().casefold()
+            qualified = re.search(r"\b(?:consolidated|condensed|combined)\b", title) is not None
+            strength = 3 if qualified else (2 if re.search(r"statements?\s+of\b", title) else 1)
+            roles[role] = max(roles.get(role, 0), strength)
+    # Exhibit indexes also list several statements with dates, without dot
+    # leaders or page references. A real combined financial table has numeric
+    # column rows; keep those while excluding a narrative list of statements.
+    if len(roles) >= 3 and not re.search(
+        r"(?m)^[ \t]*[\d,.$()\u2212\u2013-]+(?:[ \t]+[\d,.$()\u2212\u2013-]+)+[ \t]*$", heading
+    ):
+        return {}
+    return roles
+
+
+def _document_name(document_id: str) -> tuple[str, ...]:
+    return tuple(
+        term
+        for term in _tokens(document_id)
+        if not term.isdigit() and term not in _DOCUMENT_WORDS and term not in _STOP_WORDS
+    )
+
+
+def _route_pages(pages: tuple[_Page, ...], question: str) -> tuple[_Page, ...]:
+    # Only an explicit company name inferred from the stored identifiers routes
+    # a query. A question without such a name continues to search the full scope.
+    raw_words = _tokens(question)
+    words = tuple(term for term in raw_words if term not in _STOP_WORDS and term not in _DOCUMENT_WORDS)
+    names = {
+        "".join(tokens[start : start + width])
+        for tokens in (raw_words, words)
+        for start in range(len(tokens))
+        for width in range(1, 5)
+    }
+    documents = {page.document_id: _document_name(page.document_id) for page in pages}
+    matched: dict[tuple[str, ...], set[str]] = {}
+    for document_id, company in documents.items():
+        aliases = {"".join(company)}
+        if len(company) > 1:
+            acronym = "".join(term[0] for term in company)
+            if acronym not in _STOP_WORDS and acronym not in _DOCUMENT_WORDS:
+                aliases.add(acronym)
+        if company and (aliases - {""}) & names:
+            matched.setdefault(company, set()).add(document_id)
+    if not matched:
+        return pages
+    years = [term for term in _tokens(question) if re.fullmatch(r"(?:19|20|21)\d{2}", term)]
+    preferred = set()
+    for documents_in_company in matched.values():
+        current = {doc for doc in documents_in_company if years and max(years) in _tokens(doc)}
+        preferred.update(current or documents_in_company)
+    return tuple(page for page in pages if page.document_id in preferred)
+
+
 def _pages(records: tuple[MemoryEntryRecord, ...]) -> tuple[_Page, ...]:
     pages = []
     for record in records:
@@ -320,7 +429,8 @@ def _pages(records: tuple[MemoryEntryRecord, ...]) -> tuple[_Page, ...]:
                 terms=Counter(tokens),
                 tokens=tokens,
                 normalized_text=" ".join(tokens),
-                document_terms=frozenset(_tokens(header)),
+                document_id=header,
+                statements=_statement_headings(body),
             )
         )
     return tuple(pages)
@@ -366,6 +476,7 @@ def _rank_pages(
     query: dict[str, float],
     facets: tuple[dict[str, float], ...],
     phrases: tuple[str, ...],
+    statement_roles: tuple[str, ...],
     limit: int,
 ) -> tuple[MemoryCitation, ...]:
     idf, average_length = _statistics(corpus)
@@ -380,10 +491,6 @@ def _rank_pages(
         for phrase in phrases:
             if " ".join(_tokens(phrase)) in page.normalized_text:
                 score += 0.4 * sum(idf.get(term, 0.0) for term in _tokens(phrase))
-        document_match = sum(
-            weight for term, weight in query.items() if term in page.document_terms and term not in _STOP_WORDS
-        )
-        score *= 1.0 + min(1.5, 0.4 * document_match)
         previous = ranked.get(page.identity)
         if previous is None or score > previous[0]:
             ranked[page.identity] = (score, page)
@@ -391,6 +498,18 @@ def _rank_pages(
             scores[page.identity] = max(scores.get(page.identity, 0.0), _score(page, facet, idf, average_length))
     if not ranked:
         return ()
+    ordered = _fuse_rankings(ranked, facet_scores)
+    selected = _statement_candidates(ranked, statement_roles, limit)
+    for key in ordered:
+        if len(selected) >= limit:
+            break
+        selected.add(key)
+    return tuple(ranked[key][1].record.citation for key in ordered if key in selected)[:limit]
+
+
+def _fuse_rankings(
+    ranked: dict[tuple[str, str], tuple[float, _Page]], facet_scores: list[dict[tuple[str, str], float]]
+) -> list[tuple[str, str]]:
     ordered = sorted(ranked, key=lambda key: (-ranked[key][0], key))
     # Reciprocal-rank fusion preserves secondary evidence for questions needing
     # several accounting statements without letting query expansion replace the
@@ -399,9 +518,24 @@ def _rank_pages(
     for scores in facet_scores:
         facet_order = sorted((key for key in scores if scores[key] > 0), key=lambda key: (-scores[key], key))
         for rank, key in enumerate(facet_order, start=1):
-            fused[key] += 0.2 / max(1, len(facets)) / (30 + rank)
+            fused[key] += 0.5 / max(1, len(facet_scores)) / (30 + rank)
     ordered.sort(key=lambda key: (-fused[key], -ranked[key][0], key))
-    return tuple(ranked[key][1].record.citation for key in ordered[:limit])
+    return ordered
+
+
+def _statement_candidates(
+    ranked: dict[tuple[str, str], tuple[float, _Page]], roles: tuple[str, ...], limit: int
+) -> set[tuple[str, str]]:
+    # Multi-statement financial questions need complementary evidence. Reserve
+    # a small part of the result budget for each requested original statement;
+    # fill the rest from content relevance, including explanatory notes.
+    selected = set()
+    per_role = min(2, max(1, limit // (2 * max(1, len(roles)))))
+    for role in roles:
+        candidates = [key for key, (_, page) in ranked.items() if role in page.statements]
+        candidates.sort(key=lambda key: (-ranked[key][1].statements[role], -ranked[key][0], key))
+        selected.update(candidates[:per_role])
+    return selected
 
 
 async def search_pdf_pages(
@@ -423,7 +557,8 @@ async def search_pdf_pages(
     query, facets, phrases = _query(question)
     if not query:
         return ()
-    corpus = _pages((await memory.list()).entries)
+    corpus = _route_pages(_pages((await memory.list()).entries), question)
     if not corpus:
         return ()
-    return _rank_pages(corpus, query, facets, phrases, limit)
+    roles = tuple(role for role, pattern in _STATEMENT_QUESTIONS.items() if re.search(pattern, question.casefold()))
+    return _rank_pages(corpus, query, facets, phrases, roles, limit)

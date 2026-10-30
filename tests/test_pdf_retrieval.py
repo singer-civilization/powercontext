@@ -268,6 +268,240 @@ def test_document_header_matches_do_not_recall_blank_or_unrelated_pages() -> Non
     asyncio.run(scenario())
 
 
+def test_explicit_company_keeps_its_statement_among_pages_from_other_companies() -> None:
+    async def scenario() -> None:
+        registry = SourceDefinitionRegistry((PDF_PAGE_SOURCE_DEFINITION,))
+        async with open_builtin_runtime(BuiltinConfig(), candidate_pipeline=_PagePipeline()) as runtime:
+            assert runtime.scopes is not None
+            scope = await runtime.scopes.create(
+                ScopeDraft(title="Company reports", summary="Document routing", idempotency_key="company-routing")
+            )
+            await runtime.ingestion.register(manifest_for_definition(PDF_PAGE_SOURCE_DEFINITION))
+            target_source = None
+            for number in range(26):
+                target = number == 0
+                text = (
+                    "Consolidated Statements of Income\n2024 2023\nRevenue 1200 1000\nCosts 500 450\n"
+                    "Operating profit 600 450\nNet income 420 320"
+                    if target
+                    else (
+                        f"Business performance {number}\nOperating profits 2024 increased because operating profits "
+                        "and operating margins improved. Operating profits are management's key indicator."
+                    )
+                )
+                page = PDFPageInput(
+                    document_id="ACME_2024_10K" if target else "OTHER_2024_10K",
+                    document_sha256="a" * 64 if target else "b" * 64,
+                    page_number=number + 1,
+                    text=text,
+                )
+                observation = project_source_for_transport(registry, await registry.resolve(page))
+                if target:
+                    target_source = observation.name
+                await runtime.ingestion.submit(
+                    SubmitSourceObservation(scope_id=scope.scope_id, observation=observation)
+                )
+            memory = runtime.memory.for_scope(scope.scope_id)
+            while (await memory.flush()).processed:
+                pass
+            citations = await search_pdf_pages(
+                memory, "What were ACME operating profits in fiscal year 2024?", limit=20
+            )
+            sources = set()
+            for citation in citations:
+                entry = (await memory.get(GetMemoryEntryRequest(citation=citation))).entry
+                sources.update(reference.source_id for reference in entry.sources)
+            assert target_source in sources
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("notes_contain_statement_table_header", [False, True])
+def test_explicit_statement_facets_survive_repetitive_financial_notes(
+    notes_contain_statement_table_header: bool,
+) -> None:
+    async def scenario() -> None:
+        registry = SourceDefinitionRegistry((PDF_PAGE_SOURCE_DEFINITION,))
+        async with open_builtin_runtime(BuiltinConfig(), candidate_pipeline=_PagePipeline()) as runtime:
+            assert runtime.scopes is not None
+            scope = await runtime.scopes.create(
+                ScopeDraft(title="Statement facets", summary="Financial report", idempotency_key="statement-facets")
+            )
+            await runtime.ingestion.register(manifest_for_definition(PDF_PAGE_SOURCE_DEFINITION))
+            labels = (
+                "Revenue",
+                "Cost of goods sold",
+                "Gross profit",
+                "Advertising",
+                "Marketing",
+                "Selling expenses",
+                "General expenses",
+                "Administration",
+                "Research expenses",
+                "Other expenses",
+                "Operating profit",
+                "Interest expense",
+                "Interest income",
+                "Earnings before taxes",
+                "Taxes",
+                "Net income",
+                "Net income attributable to owners",
+                "Basic earnings per share",
+                "Diluted earnings per share",
+                "Weighted average shares",
+                "Diluted average shares",
+                "Dividends per share",
+            )
+            income = "Consolidated Statements of Income\nACME Inc.\n2024 2023 2022\n" + "\n".join(
+                f"{label} {1000 - index * 7} {900 - index * 6} {800 - index * 5}" for index, label in enumerate(labels)
+            )
+            cashflow = (
+                "Consolidated Statements of Cash Flows\nACME Inc.\n2024 2023\nNet income 420 320\n"
+                "Depreciation and amortization 50 40\nNet cash from operating activities 490 360\n"
+                "Additions to property plant and equipment 75 60"
+            )
+            notes = [
+                (
+                    f"Notes to Consolidated Financial Statements\nACME Inc.\nNote {number}. Accounting estimates\n"
+                    + ("Income Statement\n" if notes_contain_statement_table_header else "")
+                    + "During 2024, earnings and operating income plus depreciation and amortization reflect recent "
+                    "business performance. We use the cash flow statement and income statement to evaluate capital "
+                    "expenditures and operating activities. EBITDA and capital expenditures changed due to the "
+                    "transactions discussed in this note. Forecasting future earnings and operating profit requires "
+                    "management judgement. Expected cash flows and income will depend on demand and capacity."
+                )
+                for number in range(1, 26)
+            ]
+            expected_sources = set()
+            for number, text in enumerate((income, cashflow, *notes), 1):
+                page = PDFPageInput(
+                    document_id="ACME_2024_10K", document_sha256="c" * 64, page_number=number, text=text
+                )
+                observation = project_source_for_transport(registry, await registry.resolve(page))
+                if number <= 2:
+                    expected_sources.add(observation.name)
+                await runtime.ingestion.submit(
+                    SubmitSourceObservation(scope_id=scope.scope_id, observation=observation)
+                )
+            memory = runtime.memory.for_scope(scope.scope_id)
+            while (await memory.flush()).processed:
+                pass
+            citations = await search_pdf_pages(
+                memory,
+                "What is ACME FY2024 EBITDA less capital expenditures? Use operating income from the income "
+                "statement and depreciation and amortization from the statement of cash flows.",
+                limit=20,
+            )
+            sources = set()
+            for citation in citations:
+                entry = (await memory.get(GetMemoryEntryRequest(citation=citation))).entry
+                sources.update(reference.source_id for reference in entry.sources)
+            assert expected_sources <= sources
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("combined", [False, True])
+@pytest.mark.parametrize("contents_style", ["page-references", "exhibit-index"])
+def test_contents_entries_do_not_displace_actual_or_combined_statements(combined: bool, contents_style: str) -> None:
+    async def scenario() -> None:
+        registry = SourceDefinitionRegistry((PDF_PAGE_SOURCE_DEFINITION,))
+        async with open_builtin_runtime(BuiltinConfig(), candidate_pipeline=_PagePipeline()) as runtime:
+            assert runtime.scopes is not None
+            scope = await runtime.scopes.create(
+                ScopeDraft(title="Statement titles", summary="Contents and statements", idempotency_key="titles")
+            )
+            await runtime.ingestion.register(manifest_for_definition(PDF_PAGE_SOURCE_DEFINITION))
+            income = (
+                "Consolidated Statements of Income\n2024 2023\nRevenue 1200 1000\nCosts 500 450\n"
+                "Operating profit 600 450\nNet income 420 320"
+            )
+            if combined:
+                income += (
+                    "\nConsolidated Statements of Comprehensive Income\nNet income 420 320\n"
+                    "Currency translation 4 3\nComprehensive income 424 323\n"
+                    "Consolidated Balance Sheets\nAssets 1400 1100\nLiabilities 900 800"
+                )
+            contents = (
+                "Table of Contents\nConsolidated Statements of Income ........ 32\n"
+                "Consolidated Statements of Cash Flows ........ 35"
+            )
+            if contents_style == "exhibit-index":
+                contents = (
+                    "Exhibits and Financial Statement Schedules\nThe following statements are included by reference.\n"
+                    "Consolidated Statements of Income - fiscal years ended December 31, 2024 and December 31, 2023\n"
+                    "Consolidated Statements of Cash Flows - fiscal years ended December 31, 2024 and December 31, 2023\n"
+                    "Consolidated Balance Sheets - December 31, 2024 and December 31, 2023"
+                )
+            texts = (
+                contents,
+                income,
+                "Consolidated Statements of Cash Flows\nNet income 420 320\nDepreciation and amortization 50 40\n"
+                "Cash from operating activities 490 360\nCapital expenditures 75 60",
+            )
+            expected_sources = set()
+            for number, text in enumerate(texts, 1):
+                page = PDFPageInput(
+                    document_id="ACME_2024_10K", document_sha256="d" * 64, page_number=number, text=text
+                )
+                observation = project_source_for_transport(registry, await registry.resolve(page))
+                if number > 1:
+                    expected_sources.add(observation.name)
+                await runtime.ingestion.submit(
+                    SubmitSourceObservation(scope_id=scope.scope_id, observation=observation)
+                )
+            memory = runtime.memory.for_scope(scope.scope_id)
+            while (await memory.flush()).processed:
+                pass
+            citations = await search_pdf_pages(memory, "Find the statements of income and cash flows.", limit=2)
+            sources = set()
+            for citation in citations:
+                entry = (await memory.get(GetMemoryEntryRequest(citation=citation))).entry
+                sources.update(reference.source_id for reference in entry.sources)
+            assert sources == expected_sources
+
+    asyncio.run(scenario())
+
+
+def test_explicit_companies_and_reporting_year_keep_both_requested_reports() -> None:
+    async def scenario() -> None:
+        registry = SourceDefinitionRegistry((PDF_PAGE_SOURCE_DEFINITION,))
+        async with open_builtin_runtime(BuiltinConfig(), candidate_pipeline=_PagePipeline()) as runtime:
+            assert runtime.scopes is not None
+            scope = await runtime.scopes.create(
+                ScopeDraft(title="Comparison", summary="Companies and reporting years", idempotency_key="comparison")
+            )
+            await runtime.ingestion.register(manifest_for_definition(PDF_PAGE_SOURCE_DEFINITION))
+            expected_sources = set()
+            for company, year in (("ACME", 2023), ("ACME", 2024), ("BETA", 2023), ("BETA", 2024), ("OTHER", 2024)):
+                page = PDFPageInput(
+                    document_id=f"{company}_{year}_10K",
+                    document_sha256="e" * 64,
+                    page_number=1,
+                    text=(
+                        f"Consolidated Statements of Income\n{year}\nRevenue 1200\nCosts 500\n"
+                        "Operating profit 600\nNet income 420"
+                    ),
+                )
+                observation = project_source_for_transport(registry, await registry.resolve(page))
+                if company in {"ACME", "BETA"} and year == 2024:
+                    expected_sources.add(observation.name)
+                await runtime.ingestion.submit(
+                    SubmitSourceObservation(scope_id=scope.scope_id, observation=observation)
+                )
+            memory = runtime.memory.for_scope(scope.scope_id)
+            while (await memory.flush()).processed:
+                pass
+            citations = await search_pdf_pages(memory, "Compare ACME and BETA operating profits for 2024.", limit=20)
+            sources = set()
+            for citation in citations:
+                entry = (await memory.get(GetMemoryEntryRequest(citation=citation))).entry
+                sources.update(reference.source_id for reference in entry.sources)
+            assert sources == expected_sources
+
+    asyncio.run(scenario())
+
+
 @pytest.mark.parametrize("limit", [-1, True, False, 1.5, "2"])
 def test_retrieval_limit_requires_a_nonnegative_integer(limit: object) -> None:
     async def scenario() -> None:
