@@ -104,17 +104,72 @@ def parse_pdf_document(value: PDFDocumentInput) -> tuple[PDFPageInput, ...]:
 
 
 def _page_text(page: PageObject) -> str:
-    resources = cast(DictionaryObject, page.get("/Resources", DictionaryObject()).get_object())
-    _validate_content(page.get("/Contents"), page, resources, set(), set())
-    return page.extract_text() or ""
+    resources = _page_resources(page)
+    inherited: list[tuple[DictionaryObject, PdfObject | None]] = []
+    try:
+        _bind_resources(page, resources, inherited)
+        _validate_content(page.get("/Contents"), page, resources, resources, set(), set(), inherited)
+        return page.extract_text() or ""
+    finally:
+        # A legacy Form can occur on several pages with different fonts. Keep
+        # the repair local to this extraction instead of changing the reader's
+        # shared object permanently or rewriting the original document bytes.
+        for obj, previous in reversed(inherited):
+            if previous is None:
+                del obj["/Resources"]
+            else:
+                obj[NameObject("/Resources")] = previous
+
+
+def _page_resources(page: PageObject) -> DictionaryObject:
+    current: DictionaryObject = page
+    visited: set[int] = set()
+    while True:
+        if id(current) in visited:
+            raise ValueError("PDF page resource inheritance must not be cyclic")  # noqa: TRY003
+        visited.add(id(current))
+        resources = current.get("/Resources")
+        if resources is not None:
+            resources = resources.get_object()
+            if not isinstance(resources, NullObject):
+                if not isinstance(resources, DictionaryObject):
+                    raise TypeError("PDF Resources must be a dictionary")  # noqa: TRY003
+                return resources
+        parent = current.get("/Parent")
+        if parent is None:
+            return DictionaryObject()
+        current = cast(DictionaryObject, parent.get_object())
+
+
+def _bind_resources(
+    obj: DictionaryObject,
+    default: DictionaryObject,
+    inherited: list[tuple[DictionaryObject, PdfObject | None]],
+) -> DictionaryObject:
+    resources = obj.get("/Resources")
+    if resources is not None:
+        resources = resources.get_object()
+    if resources is None or isinstance(resources, NullObject):
+        # ISO 32000-1, 7.8.3: legacy Forms without Resources use the page's
+        # resources, including when nested inside an independent Form. pypdf's
+        # text extractor does not implement that fallback itself. A null value
+        # is equivalent to an absent dictionary entry (7.3.7).
+        inherited.append((obj, obj.raw_get("/Resources") if "/Resources" in obj else None))
+        obj[NameObject("/Resources")] = default
+        return default
+    if not isinstance(resources, DictionaryObject):
+        raise TypeError("PDF Resources must be a dictionary")  # noqa: TRY003
+    return resources
 
 
 def _validate_content(
     content: PdfObject | None,
     page: PageObject,
     resources: DictionaryObject,
+    page_resources: DictionaryObject,
     ancestors: set[int],
     validated_forms: set[int],
+    inherited: list[tuple[DictionaryObject, PdfObject | None]],
 ) -> None:
     for operands, operator in _content_operations(content, page):
         if operator != b"Do":
@@ -131,9 +186,11 @@ def _validate_content(
         _validate_content(
             xobject,
             page,
-            cast(DictionaryObject, xobject.get("/Resources", resources).get_object()),
+            _bind_resources(xobject, page_resources, inherited),
+            page_resources,
             ancestors | {identity},
             validated_forms,
+            inherited,
         )
         validated_forms.add(identity)
 

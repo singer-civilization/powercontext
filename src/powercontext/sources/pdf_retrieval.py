@@ -249,6 +249,67 @@ _CONCEPTS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ),
 )
 
+# Ratios are commonly named in a question but absent from the original
+# financial statements. Retrieve their underlying accounting line items and
+# the complementary statements needed to calculate them.
+_ACCOUNTING_METRICS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
+    (
+        r"\b(?:current\s+ratio|working\s+capital)\b",
+        ("current assets", "current liabilities"),
+        ("balance",),
+    ),
+    (
+        r"\bquick\s+ratio\b",
+        ("cash", "accounts receivable", "short term investments", "current assets", "inventory", "current liabilities"),
+        ("balance",),
+    ),
+    (
+        r"\b(?:return\s+on\s+(?:common\s+|shareholders?\s+)?equity|roe)\b",
+        ("net income", "shareholders equity", "stockholders equity"),
+        ("income", "balance"),
+    ),
+    (
+        r"\b(?:return\s+on\s+(?:total\s+)?assets?|roa)\b",
+        ("net income", "total assets"),
+        ("income", "balance"),
+    ),
+    (
+        r"\b(?:return\s+on\s+invested\s+capital|roic)\b",
+        ("operating income", "income taxes", "debt", "equity", "cash"),
+        ("income", "balance"),
+    ),
+    (
+        r"\b(?:total\s+)?assets?\s+turnover\b",
+        ("revenue", "net sales", "total assets"),
+        ("income", "balance"),
+    ),
+    (
+        r"\b(?:interest\s+coverage|times\s+interest\s+earned)\b",
+        ("operating income", "interest expense", "income before taxes"),
+        ("income",),
+    ),
+    (
+        r"\b(?:effective\s+(?:income\s+)?tax\s+rate|etr)\b",
+        ("income tax expense", "income before taxes"),
+        ("income",),
+    ),
+    (
+        r"\bnet\s+(?:(?:income|profit)\s+)?margin\b",
+        ("net income", "revenue", "net sales"),
+        ("income",),
+    ),
+    (
+        r"\bgross\s+(?:profit\s+)?margin\b",
+        ("gross profit", "revenue", "net sales", "cost of goods sold"),
+        ("income",),
+    ),
+    (
+        r"\boperating\s+(?:profit\s+)?margin\b",
+        ("operating income", "operating profit", "revenue", "net sales"),
+        ("income",),
+    ),
+)
+
 _DOCUMENT_WORDS = frozenset({
     "annual",
     "report",
@@ -330,7 +391,8 @@ def _query(question: str) -> tuple[dict[str, float], tuple[dict[str, float], ...
     weights = dict(original)
     facets = []
     phrases = []
-    for pattern, expansions in _CONCEPTS:
+    concepts = (*_CONCEPTS, *((pattern, terms) for pattern, terms, _ in _ACCOUNTING_METRICS))
+    for pattern, expansions in concepts:
         if not re.search(pattern, normalized):
             continue
         facet = {}
@@ -390,7 +452,20 @@ def _route_pages(pages: tuple[_Page, ...], question: str) -> tuple[_Page, ...]:
     }
     documents = {page.document_id: _document_name(page.document_id) for page in pages}
     matched: dict[tuple[str, ...], set[str]] = {}
+    financial_terms = {
+        term
+        for expansions in (
+            *(terms for _, terms in _CONCEPTS),
+            *(terms for _, terms, _ in _ACCOUNTING_METRICS),
+        )
+        for expansion in expansions
+        for term in _tokens(expansion)
+    }
     for document_id, company in documents.items():
+        # An identifier such as EQUITY must not make an ordinary financial
+        # noun into an explicit company request and discard the other reports.
+        if company and all(term in financial_terms for term in company):
+            continue
         aliases = {"".join(company)}
         if len(company) > 1:
             acronym = "".join(term[0] for term in company)
@@ -400,10 +475,10 @@ def _route_pages(pages: tuple[_Page, ...], question: str) -> tuple[_Page, ...]:
             matched.setdefault(company, set()).add(document_id)
     if not matched:
         return pages
-    years = [term for term in _tokens(question) if re.fullmatch(r"(?:19|20|21)\d{2}", term)]
+    years = {term for term in _tokens(question) if re.fullmatch(r"(?:19|20|21)\d{2}", term)}
     preferred = set()
     for documents_in_company in matched.values():
-        current = {doc for doc in documents_in_company if years and max(years) in _tokens(doc)}
+        current = {doc for doc in documents_in_company if years.intersection(_tokens(doc))}
         preferred.update(current or documents_in_company)
     return tuple(page for page in pages if page.document_id in preferred)
 
@@ -560,5 +635,9 @@ async def search_pdf_pages(
     corpus = _route_pages(_pages((await memory.list()).entries), question)
     if not corpus:
         return ()
-    roles = tuple(role for role, pattern in _STATEMENT_QUESTIONS.items() if re.search(pattern, question.casefold()))
-    return _rank_pages(corpus, query, facets, phrases, roles, limit)
+    normalized = unicodedata.normalize("NFKC", question).casefold()
+    roles = {role for role, pattern in _STATEMENT_QUESTIONS.items() if re.search(pattern, normalized)}
+    for pattern, _, metric_roles in _ACCOUNTING_METRICS:
+        if re.search(pattern, normalized):
+            roles.update(metric_roles)
+    return _rank_pages(corpus, query, facets, phrases, tuple(sorted(roles)), limit)

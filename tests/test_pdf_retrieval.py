@@ -502,6 +502,179 @@ def test_explicit_companies_and_reporting_year_keep_both_requested_reports() -> 
     asyncio.run(scenario())
 
 
+@pytest.mark.parametrize(
+    ("metric", "expected_pages"),
+    [
+        ("return on equity", {1, 2}),
+        ("ROE", {1, 2}),
+        ("return on assets", {1, 2}),
+        ("ROA", {1, 2}),
+        ("return on invested capital", {1, 2}),
+        ("ROIC", {1, 2}),
+        ("asset turnover", {1, 2}),
+        ("interest coverage ratio", {1}),
+        ("effective tax rate", {1}),
+        ("net income margin", {1}),
+        ("gross profit margin", {1}),
+        ("operating profit margin", {1}),
+    ],
+)
+def test_accounting_metrics_recall_required_statements_among_repetitive_notes(
+    metric: str, expected_pages: set[int]
+) -> None:
+    async def scenario() -> None:
+        registry = SourceDefinitionRegistry((PDF_PAGE_SOURCE_DEFINITION,))
+        async with open_builtin_runtime(BuiltinConfig(), candidate_pipeline=_PagePipeline()) as runtime:
+            assert runtime.scopes is not None
+            scope = await runtime.scopes.create(
+                ScopeDraft(title="Accounting ratios", summary="Statement evidence", idempotency_key="ratios")
+            )
+            await runtime.ingestion.register(manifest_for_definition(PDF_PAGE_SOURCE_DEFINITION))
+            texts = [
+                (
+                    "Consolidated Statements of Income\n2024 2023\nRevenue 1200 1000\nCost of goods sold 800 700\n"
+                    "Gross profit 400 300\nOperating income 300 240\nInterest expense 50 40\n"
+                    "Income before taxes 250 200\nIncome tax expense 50 40\nNet income 200 160"
+                ),
+                (
+                    "Consolidated Balance Sheets\n2024 2023\nCash 100 80\nTotal assets 1800 1600\n"
+                    "Debt 400 350\nTotal liabilities 800 700\nShareholders equity 1000 900"
+                ),
+                *[
+                    f"Accounting policy note {number}\n"
+                    + f"The {metric} is a management performance indicator in 2024. " * 6
+                    for number in range(25)
+                ],
+            ]
+            expected_sources = set()
+            for number, text in enumerate(texts, 1):
+                page = PDFPageInput(
+                    document_id="ACME_2024_10K", document_sha256="f" * 64, page_number=number, text=text
+                )
+                observation = project_source_for_transport(registry, await registry.resolve(page))
+                if number in expected_pages:
+                    expected_sources.add(observation.name)
+                await runtime.ingestion.submit(
+                    SubmitSourceObservation(scope_id=scope.scope_id, observation=observation)
+                )
+            memory = runtime.memory.for_scope(scope.scope_id)
+            while (await memory.flush()).processed:
+                pass
+            citations = await search_pdf_pages(memory, f"What is ACME {metric} for FY2024?", limit=20)
+            sources = set()
+            for citation in citations:
+                record = await memory.get(GetMemoryEntryRequest(citation=citation))
+                sources.update(source.source_id for source in record.entry.sources)
+            assert expected_sources <= sources
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("metric", ["quick ratio", "working capital"])
+def test_liquidity_metrics_without_a_year_recall_underlying_balance_sheet(metric: str) -> None:
+    async def scenario() -> None:
+        registry = SourceDefinitionRegistry((PDF_PAGE_SOURCE_DEFINITION,))
+        async with open_builtin_runtime(BuiltinConfig(), candidate_pipeline=_PagePipeline()) as runtime:
+            assert runtime.scopes is not None
+            scope = await runtime.scopes.create(
+                ScopeDraft(title="Liquidity", summary="Balance sheet items", idempotency_key="liquidity")
+            )
+            await runtime.ingestion.register(manifest_for_definition(PDF_PAGE_SOURCE_DEFINITION))
+            page = PDFPageInput(
+                document_id="ACME_2024_10K",
+                document_sha256="b" * 64,
+                page_number=1,
+                text=(
+                    "Consolidated Balance Sheets\nCash 30\nAccounts receivable 40\nInventory 20\n"
+                    "Current assets 100\nCurrent liabilities 50"
+                ),
+            )
+            observation = project_source_for_transport(registry, await registry.resolve(page))
+            await runtime.ingestion.submit(SubmitSourceObservation(scope_id=scope.scope_id, observation=observation))
+            memory = runtime.memory.for_scope(scope.scope_id)
+            while (await memory.flush()).processed:
+                pass
+            citations = await search_pdf_pages(memory, f"What is the {metric}?")
+            assert len(citations) == 1
+            record = await memory.get(GetMemoryEntryRequest(citation=citations[0]))
+            assert record.entry.sources[0].source_id == observation.name
+
+    asyncio.run(scenario())
+
+
+def test_explicit_comparison_keeps_each_requested_reporting_year() -> None:
+    async def scenario() -> None:
+        registry = SourceDefinitionRegistry((PDF_PAGE_SOURCE_DEFINITION,))
+        async with open_builtin_runtime(BuiltinConfig(), candidate_pipeline=_PagePipeline()) as runtime:
+            assert runtime.scopes is not None
+            scope = await runtime.scopes.create(
+                ScopeDraft(title="Year comparison", summary="Multiple annual reports", idempotency_key="years")
+            )
+            await runtime.ingestion.register(manifest_for_definition(PDF_PAGE_SOURCE_DEFINITION))
+            expected_sources = set()
+            for year in (2022, 2023, 2024):
+                page = PDFPageInput(
+                    document_id=f"ACME_{year}_10K",
+                    document_sha256=str(year % 10) * 64,
+                    page_number=1,
+                    text=f"Consolidated Statements of Income\n{year}\nOperating income {year - 2000}",
+                )
+                observation = project_source_for_transport(registry, await registry.resolve(page))
+                if year in (2023, 2024):
+                    expected_sources.add(observation.name)
+                await runtime.ingestion.submit(
+                    SubmitSourceObservation(scope_id=scope.scope_id, observation=observation)
+                )
+            memory = runtime.memory.for_scope(scope.scope_id)
+            while (await memory.flush()).processed:
+                pass
+            citations = await search_pdf_pages(
+                memory, "Compare ACME operating income in the 2023 and 2024 annual reports.", limit=20
+            )
+            sources = set()
+            for citation in citations:
+                record = await memory.get(GetMemoryEntryRequest(citation=citation))
+                sources.update(source.source_id for source in record.entry.sources)
+            assert sources == expected_sources
+
+    asyncio.run(scenario())
+
+
+def test_financial_noun_is_not_an_explicit_company_name() -> None:
+    async def scenario() -> None:
+        registry = SourceDefinitionRegistry((PDF_PAGE_SOURCE_DEFINITION,))
+        async with open_builtin_runtime(BuiltinConfig(), candidate_pipeline=_PagePipeline()) as runtime:
+            assert runtime.scopes is not None
+            scope = await runtime.scopes.create(
+                ScopeDraft(title="Financial vocabulary", summary="Company names", idempotency_key="noun-routing")
+            )
+            await runtime.ingestion.register(manifest_for_definition(PDF_PAGE_SOURCE_DEFINITION))
+            expected_sources = set()
+            for company in ("ACME", "EQUITY"):
+                page = PDFPageInput(
+                    document_id=f"{company}_2024_10K",
+                    document_sha256="a" * 64,
+                    page_number=1,
+                    text="Consolidated Balance Sheets\n2024\nShareholders equity 1000",
+                )
+                observation = project_source_for_transport(registry, await registry.resolve(page))
+                expected_sources.add(observation.name)
+                await runtime.ingestion.submit(
+                    SubmitSourceObservation(scope_id=scope.scope_id, observation=observation)
+                )
+            memory = runtime.memory.for_scope(scope.scope_id)
+            while (await memory.flush()).processed:
+                pass
+            citations = await search_pdf_pages(memory, "What is the return on equity in FY2024?", limit=20)
+            sources = set()
+            for citation in citations:
+                record = await memory.get(GetMemoryEntryRequest(citation=citation))
+                sources.update(source.source_id for source in record.entry.sources)
+            assert sources == expected_sources
+
+    asyncio.run(scenario())
+
+
 @pytest.mark.parametrize("limit", [-1, True, False, 1.5, "2"])
 def test_retrieval_limit_requires_a_nonnegative_integer(limit: object) -> None:
     async def scenario() -> None:

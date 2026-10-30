@@ -259,6 +259,84 @@ def test_form_text_with_indirect_or_inherited_page_resources_is_preserved(inheri
     assert pages[1].text.strip() == "Revenue 123 and operating income 45"
 
 
+def _legacy_form_pdf(*, null_resources: bool, nested: bool, encrypted: bool) -> bytes:
+    writer = PdfWriter()
+
+    def resources(initial: str) -> DictionaryObject:
+        font = DictionaryObject({
+            NameObject("/Type"): NameObject("/Font"),
+            NameObject("/Subtype"): NameObject("/Type1"),
+            NameObject("/BaseFont"): NameObject("/Helvetica"),
+            NameObject("/Encoding"): DictionaryObject({
+                NameObject("/Type"): NameObject("/Encoding"),
+                NameObject("/BaseEncoding"): NameObject("/WinAnsiEncoding"),
+                NameObject("/Differences"): ArrayObject([NumberObject(65), NameObject(f"/{initial}")]),
+            }),
+        })
+        return DictionaryObject({NameObject("/Font"): DictionaryObject({NameObject("/F1"): font})})
+
+    def form(data: bytes) -> DecodedStreamObject:
+        result = DecodedStreamObject()
+        result.set_data(data)
+        result[NameObject("/Type")] = NameObject("/XObject")
+        result[NameObject("/Subtype")] = NameObject("/Form")
+        result[NameObject("/BBox")] = ArrayObject([NumberObject(n) for n in (0, 0, 300, 300)])
+        return result
+
+    legacy = form(b"BT /F1 12 Tf 10 100 Td (A revenue 123) Tj ET")
+    if null_resources:
+        legacy[NameObject("/Resources")] = NullObject()
+    legacy_ref = writer._add_object(legacy)
+    invoked = legacy_ref
+    if nested:
+        outer = form(b"BT /F1 12 Tf 10 150 Td (A outer) Tj ET /Legacy Do")
+        outer_resources = resources("C")
+        outer_resources[NameObject("/XObject")] = DictionaryObject({NameObject("/Legacy"): legacy_ref})
+        outer[NameObject("/Resources")] = outer_resources
+        invoked = writer._add_object(outer)
+    for initial in ("A", "B"):
+        page = writer.add_blank_page(width=300, height=300)
+        page_resources = resources(initial)
+        page_resources[NameObject("/XObject")] = DictionaryObject({NameObject("/Shared"): invoked})
+        page[NameObject("/Resources")] = page_resources
+        content = DecodedStreamObject()
+        content.set_data(b"/Shared Do")
+        page[NameObject("/Contents")] = writer._add_object(content)
+    if encrypted:
+        writer.encrypt(user_password="", owner_password="owner-secret")  # noqa: S106 - Synthetic fixture.
+    output = io.BytesIO()
+    writer.write(output)
+    return output.getvalue()
+
+
+@pytest.mark.parametrize("null_resources", [False, True])
+@pytest.mark.parametrize("nested", [False, True])
+@pytest.mark.parametrize("encrypted", [False, True])
+def test_legacy_forms_inherit_each_page_resources_without_losing_text_or_changing_own_resources(
+    null_resources: bool, nested: bool, encrypted: bool
+) -> None:
+    content = _legacy_form_pdf(null_resources=null_resources, nested=nested, encrypted=encrypted)
+    pages = parse_pdf_document(PDFDocumentInput(document_id="shared-form", content=content))
+    assert len(pages) == 2
+    assert "A revenue 123" in pages[0].text
+    assert "B revenue 123" in pages[1].text
+    if nested:
+        assert all("C outer" in page.text for page in pages)
+        assert all("C revenue" not in page.text for page in pages)
+    assert all(page.document_sha256 == hashlib.sha256(content).hexdigest() for page in pages)
+
+
+def test_null_page_resources_inherit_the_parent_resource_dictionary() -> None:
+    writer = PdfWriter(clone_from=io.BytesIO(_pdf(("Revenue 123",))))
+    page = writer.pages[0]
+    cast(DictionaryObject, page["/Parent"])[NameObject("/Resources")] = page.raw_get("/Resources")
+    page[NameObject("/Resources")] = NullObject()
+    output = io.BytesIO()
+    writer.write(output)
+    pages = parse_pdf_document(PDFDocumentInput(document_id="null-page-resources", content=output.getvalue()))
+    assert pages[0].text == "Revenue 123"
+
+
 @pytest.mark.parametrize("document_id", ["", " ", "\n\t", "\u3000"])
 def test_document_ids_must_contain_non_whitespace(document_id: str) -> None:
     with pytest.raises(ValueError):
