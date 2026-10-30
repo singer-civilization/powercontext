@@ -8374,7 +8374,40 @@ OPENAPI_SCHEMA: dict[str, JsonValue] = {
                     "text": {
                         "type": "string",
                         "minLength": 1,
-                        "description": "Must not exceed 8192 UTF-8 bytes after normalization.",
+                        "description": "Ordinary "
+                        "entries "
+                        "must "
+                        "not "
+                        "exceed "
+                        "8192 "
+                        "UTF-8 "
+                        "bytes "
+                        "after "
+                        "NFC "
+                        "normalization "
+                        "and "
+                        "trimming. "
+                        "Entries "
+                        "backed "
+                        "by "
+                        "exactly "
+                        "one "
+                        "distinct "
+                        "pdf-page "
+                        "Source "
+                        "reference "
+                        "retain "
+                        "original "
+                        "Unicode "
+                        "after "
+                        "trimming "
+                        "and "
+                        "allow "
+                        "up "
+                        "to "
+                        "4194304 "
+                        "UTF-8 "
+                        "bytes.",
                     },
                     "reason": {"type": "string", "maxLength": 512, "nullable": True},
                     "expected_revision": {"type": "integer", "minimum": 1.0, "nullable": True},
@@ -8500,7 +8533,40 @@ OPENAPI_SCHEMA: dict[str, JsonValue] = {
                     "text": {
                         "type": "string",
                         "minLength": 1,
-                        "description": "Must not exceed 8192 UTF-8 bytes after normalization.",
+                        "description": "Ordinary "
+                        "entries "
+                        "must "
+                        "not "
+                        "exceed "
+                        "8192 "
+                        "UTF-8 "
+                        "bytes "
+                        "after "
+                        "NFC "
+                        "normalization "
+                        "and "
+                        "trimming. "
+                        "Entries "
+                        "backed "
+                        "by "
+                        "exactly "
+                        "one "
+                        "distinct "
+                        "pdf-page "
+                        "Source "
+                        "reference "
+                        "retain "
+                        "original "
+                        "Unicode "
+                        "after "
+                        "trimming "
+                        "and "
+                        "allow "
+                        "up "
+                        "to "
+                        "4194304 "
+                        "UTF-8 "
+                        "bytes.",
                     },
                     "reason": {"type": "string", "maxLength": 512, "nullable": True},
                 },

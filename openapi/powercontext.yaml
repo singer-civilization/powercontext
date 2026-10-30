@@ -9150,7 +9150,10 @@ components:
         text:
           type: string
           minLength: 1
-          description: Must not exceed 8192 UTF-8 bytes after normalization.
+          description: >-
+            Ordinary entries must not exceed 8192 UTF-8 bytes after NFC normalization and trimming.
+            Entries backed by exactly one distinct pdf-page Source reference retain original Unicode
+            after trimming and allow up to 4194304 UTF-8 bytes.
         reason:
           type: string
           maxLength: 512
@@ -9267,7 +9270,10 @@ components:
         text:
           type: string
           minLength: 1
-          description: Must not exceed 8192 UTF-8 bytes after normalization.
+          description: >-
+            Ordinary entries must not exceed 8192 UTF-8 bytes after NFC normalization and trimming.
+            Entries backed by exactly one distinct pdf-page Source reference retain original Unicode
+            after trimming and allow up to 4194304 UTF-8 bytes.
         reason:
           type: string
           maxLength: 512

@@ -1733,7 +1733,13 @@ class RememberMemoryRequest(BaseModel):
     )
     scope_id: Annotated[StrictStr, Field(max_length=256, min_length=1, pattern=".*\\S.*")]
     kind: Annotated[StrictStr, Field(max_length=128, min_length=1)]
-    text: Annotated[StrictStr, Field(description="Must not exceed 8192 UTF-8 bytes after normalization.", min_length=1)]
+    text: Annotated[
+        StrictStr,
+        Field(
+            description="Ordinary entries must not exceed 8192 UTF-8 bytes after NFC normalization and trimming. Entries backed by exactly one distinct pdf-page Source reference retain original Unicode after trimming and allow up to 4194304 UTF-8 bytes.",
+            min_length=1,
+        ),
+    ]
     reason: Annotated[StrictStr | None, Field(max_length=512)] = None
     expected_revision: Annotated[StrictInt | None, Field(ge=1)] = None
 
@@ -1764,7 +1770,13 @@ class ReviseMemoryEntryRequest(BaseModel):
     scope_id: Annotated[StrictStr, Field(max_length=256, min_length=1, pattern=".*\\S.*")]
     citation: MemoryCitation
     kind: Annotated[StrictStr, Field(max_length=128, min_length=1)]
-    text: Annotated[StrictStr, Field(description="Must not exceed 8192 UTF-8 bytes after normalization.", min_length=1)]
+    text: Annotated[
+        StrictStr,
+        Field(
+            description="Ordinary entries must not exceed 8192 UTF-8 bytes after NFC normalization and trimming. Entries backed by exactly one distinct pdf-page Source reference retain original Unicode after trimming and allow up to 4194304 UTF-8 bytes.",
+            min_length=1,
+        ),
+    ]
     reason: Annotated[StrictStr | None, Field(max_length=512)] = None
 
 

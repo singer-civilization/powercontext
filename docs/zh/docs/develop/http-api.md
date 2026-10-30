@@ -204,8 +204,10 @@ Principal，并注入 Authorization Provider。HTTP 与 MCP 使用同一个策�
 }
 ```
 
-`/v1/memory/remember` 和 `/v1/memory/entries/revise` 的正文在 Unicode NFC 规范化并去掉首尾空白后，
-最多为 8192 个 UTF-8 字节。这是字节数限制，不是字符数限制。正文超限时返回 HTTP `422`，
+`/v1/memory/remember` 和 `/v1/memory/entries/revise` 的普通正文在 Unicode NFC 规范化并去掉首尾空白后，
+最多为 8192 个 UTF-8 字节。这是字节数限制，不是字符数限制。恰好关联一个不同的 `pdf-page` Source 引用的
+整页 entry 仅去除首尾空白并保留原始 Unicode，允许最多 4 MiB 的 UTF-8 正文；Source 授权和 Memory 整体容量限制仍生效。
+普通正文超限时返回 HTTP `422`，
 顶层错误码仍为 `invalid_request`：
 
 ```json
