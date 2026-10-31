@@ -5,12 +5,12 @@
     "indexed v1 specification, code, and target tests",
     "refreshed the index with specification v2",
     "verified the same tests fail before and pass after",
+    "fixed MiniMax TLS with the certifi CA bundle and confirmed the request reaches api.minimaxi.com",
     "recovered task state after a full PowerContext server restart",
-    "fixed MiniMax TLS with the certifi CA bundle and confirmed the request reaches api.minimaxi.com"
+    "generated the implementation patch with a live MiniMax credential (MiniMax-M3.1-Flash, request 0734d11aac4a1d43c58d46a5f1c726da)",
+    "applied the live patch to the before snapshot and the target tests pass"
   ],
-  "todo": [
-    "generate the implementation patch with a live MiniMax credential (blocked: MiniMax account balance is CNY 0.00, every live model returns 402 insufficient balance)"
-  ],
+  "todo": [],
   "validation": {
     "before": "2 failed, 1 passed because list_tasks has no status parameter",
     "after": "3 passed",
@@ -18,7 +18,8 @@
     "ruff": "all checks passed",
     "spec_refresh": "version 1 to 2; new checksum retrieved",
     "powercontext_restart": "state recovered after server stop and fresh start",
-    "minimax_live": "authentication accepted; MiniMax-M2.7/M2.5/M2 retired with 2069; default model now MiniMax-M3.1-Flash; live generation blocked by an empty wallet, evidence/live stays empty",
-    "live_patch_verifier": "scripts/verify_live_patch.py applies the live patch to the before snapshot and runs the target tests"
+    "live_patch_verifier": "scripts/verify_live_patch.py applies the live patch to the before snapshot and runs the target tests",
+    "minimax_live": "MiniMax-M3.1-Flash via /v1/chat/completions; 1540 tokens total (443 reasoning); context sha256 88094493927b",
+    "live_patch": "git apply --recount succeeded; target tests 3 passed"
   }
 }

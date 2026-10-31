@@ -194,6 +194,7 @@ class SeekDBDocumentStore:
                     score=float(score),
                     excerpt=excerpt,
                     line=line,
+                    content=content,
                 )
             )
         return sorted(hits, key=lambda hit: (-hit.score, hit.kind, hit.path))[:limit]

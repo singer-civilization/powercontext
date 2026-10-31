@@ -102,6 +102,7 @@ def main(argv: list[str] | None = None) -> int:
             os.environ.get("MINIMAX_API_KEY", ""),
             os.environ.get("MINIMAX_MODEL", "MiniMax-M3.1-Flash"),
             os.environ.get("MINIMAX_API_URL", "https://api.minimaxi.com/v1/chat/completions"),
+            int(os.environ.get("MINIMAX_MAX_TOKENS", "16384")),
         )
         result = client.generate_patch(context, args.objective)
         args.output.parent.mkdir(parents=True, exist_ok=True)

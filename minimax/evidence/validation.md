@@ -64,12 +64,44 @@ No inference provider was configured for PowerContext. Explicit Memory remember/
 
 ## MiniMax live call
 
-2026-10-31 15:30（Asia/Shanghai）在本机实测，结论：**链路通了，但账户余额为 0，真实生成还未发生**。`evidence/live/` 保持为空，不伪造 provider 记录。
+2026-10-31 15:5x（Asia/Shanghai）本机真实调用成功，记录来自 `evidence/live/minimax.patch.json`：
+
+```json
+{
+  "provider": "MiniMax",
+  "model": "MiniMax-M3.1-Flash",
+  "request_id": "0734d11aac4a1d43c58d46a5f1c726da",
+  "usage": {
+    "total_tokens": 1540,
+    "total_characters": 0,
+    "prompt_tokens": 900,
+    "completion_tokens": 640,
+    "completion_tokens_details": {
+      "reasoning_tokens": 443
+    },
+    "prompt_tokens_details": {
+      "cached_tokens": 128
+    }
+  },
+  "context_sha256": "88094493927b95e02837441bbc129cd60c60cf359879c9a873cec9fd6990644c"
+}
+```
 
 - **TLS**：旧实现用 `urlopen` 的默认上下文，首次调用报 `CERTIFICATE_VERIFY_FAILED`；改为 `ssl.create_default_context(cafile=certifi.where())` 并把 `certifi>=2025.1` 加入依赖后，请求可以正常到达 `api.minimaxi.com`。
-- **鉴权**：用平台 Key 请求 `/v1/chat/completions`，返回的是业务错误（模型不可用 / 余额不足）而不是 401，说明 Key 本身有效。
-- **模型**：`GET /v1/models` 当前返回 `MiniMax-M3.1-Flash`、`MiniMax-M3`、`MiniMax-M2.7`、`MiniMax-M2.7-highspeed`、`MiniMax-M2.5`、`MiniMax-M2.1`、`MiniMax-M2`。实际调用 `MiniMax-M2.7`、`MiniMax-M2.5`、`MiniMax-M2` 都返回 `2069 The model ... is no longer available`（列表里还在，但已不可调用），默认模型因此改为 `MiniMax-M3.1-Flash`。
-- **余额**：控制台显示可用额度 ¥0.00（现金余额、代金券、授信额度均为 0.00，无充值记录）。`MiniMax-M3.1-Flash` 与 `MiniMax-M3`、`MiniMax-Text-01` 均返回 `402 insufficient balance (1008)`。
-- **恢复方式**：充值后按 README 第 4 节执行 `sdd-context --root . generate ... --output evidence/live/minimax.patch`，会同时产出 `minimax.patch.json`（provider / model / request ID / usage / context SHA-256，不含 Key）；再用 `python scripts/verify_live_patch.py` 把这份 patch 打到 before 快照上跑目标测试，通过即闭环。
+- **模型**：`MiniMax-M2.7`/`M2.5`/`M2` 仍出现在 `GET /v1/models` 里，但实际调用返回 `2069 The model ... is no longer available`；端点切到 `/v1/chat/completions`，默认模型改为 `MiniMax-M3.1-Flash`。
+- **余额**：首次实测时账户可用额度为 ¥0.00，所有模型返回 `402 insufficient balance (1008)`；充值到 ¥25.00（现金 10 + 代金券 15）后调用打通。
+- **推理模型的两个坑**（都已在代码里处理）：
+  1. `MiniMax-M3.1-Flash` 是推理模型，`max_tokens=4096` 时 4096 个 token 全被 `reasoning_content` 吃光，`finish_reason=length` 且没有 `content`。现在默认 `MINIMAX_MAX_TOKENS=16384`，并在 `finish_reason=length` 时明确报错。
+  2. 第一次成功返回的内容是一句说明文字而不是 diff（上下文当时只给了一行代码摘录，模型无从下手）。现在 `render_context` 会为每个命中附带完整文件正文，客户端也会在返回值不是 unified diff 时直接报错，不会把散文写进 patch 文件。
+- **patch 应用**：模型给出的 hunk 头计数差一（`@@ -10,7 +10,13 @@`，实际 6/12 行），`scripts/verify_live_patch.py` 用 `git apply --recount` 应用，目标测试 3 passed。
 
-`scripts/verify_live_patch.py` 的用例已用 before→after 快照的等价 diff 验证过：patch 能干净应用，目标测试 3 passed，脚本退出码 0。
+复现命令：
+
+```bash
+export MINIMAX_API_KEY='<key>'
+export MINIMAX_MODEL='MiniMax-M3.1-Flash'
+sdd-context --root . generate \
+  'Implement the v2 task status filter and make done-filter tests pass' \
+  --task-id task-filter --output evidence/live/minimax.patch
+python scripts/verify_live_patch.py
+```

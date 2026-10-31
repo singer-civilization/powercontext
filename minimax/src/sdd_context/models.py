@@ -25,6 +25,7 @@ class SearchHit:
     score: float
     excerpt: str
     line: int
+    content: str = ""
 
     @property
     def citation(self) -> str:

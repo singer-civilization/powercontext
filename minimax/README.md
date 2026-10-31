@@ -96,8 +96,9 @@ pytest
 ruff check .
 python scripts/verify_before_after.py
 python scripts/verify_spec_refresh.py
+python scripts/verify_live_patch.py
 ```
 
-`verify_before_after.py` 对 before/after 两个快照运行完全相同的测试文件：before 必须失败，after 必须通过。`verify_spec_refresh.py` 先导入 v1，再用同一路径的 v2 覆盖并重新导入，断言检索结果使用版本 2 和新的 checksum。
+`verify_before_after.py` 对 before/after 两个快照运行完全相同的测试文件：before 必须失败，after 必须通过。`verify_spec_refresh.py` 先导入 v1，再用同一路径的 v2 覆盖并重新导入，断言检索结果使用版本 2 和新的 checksum。`verify_live_patch.py` 用 `git apply --recount` 把 MiniMax 真实生成的 patch 打到 before 快照上并跑目标测试。
 
 竞赛现场完整证据应放在忽略提交的 `evidence/live/`，审查后将脱敏的日志复制到提交材料；不得提交 `.env`、API Key 或私有推理过程。

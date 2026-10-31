@@ -4,6 +4,16 @@ from collections import defaultdict
 
 from .models import SearchHit, TaskState
 
+MAX_DOCUMENT_CHARS = 4000
+_LANGUAGES = {".py": "python", ".md": "markdown", ".toml": "toml", ".json": "json"}
+
+
+def _language(path: str) -> str:
+    for suffix, name in _LANGUAGES.items():
+        if path.endswith(suffix):
+            return name
+    return "text"
+
 
 def render_context(objective: str, hits: list[SearchHit], state: TaskState | None) -> str:
     grouped: dict[str, list[SearchHit]] = defaultdict(list)
@@ -20,6 +30,8 @@ def render_context(objective: str, hits: list[SearchHit], state: TaskState | Non
         for hit in selected:
             symbol = f" symbols={hit.symbol}" if hit.symbol else ""
             lines.append(f"- [{hit.citation}] version={hit.version}{symbol} score={hit.score:.0f}: {hit.excerpt}")
+            if hit.content:
+                lines.extend(("", f"```{_language(hit.path)}", hit.content.rstrip()[:MAX_DOCUMENT_CHARS], "```"))
         lines.append("")
 
     lines.extend(("## Persisted progress (PowerContext)", ""))

@@ -14,6 +14,9 @@ class MiniMaxError(RuntimeError):
     pass
 
 
+DEFAULT_MAX_TOKENS = 16384
+
+
 @dataclass(frozen=True)
 class MiniMaxResult:
     model: str
@@ -25,17 +28,19 @@ class MiniMaxResult:
 class MiniMaxClient:
     """OpenAI-compatible MiniMax chat client with no SDK lock-in."""
 
-    def __init__(self, api_key: str, model: str, api_url: str) -> None:
+    def __init__(self, api_key: str, model: str, api_url: str, max_tokens: int = DEFAULT_MAX_TOKENS) -> None:
         if not api_key:
             raise MiniMaxError("MINIMAX_API_KEY is required for a live generation")
         self.api_key = api_key
         self.model = model
         self.api_url = api_url
+        self.max_tokens = max_tokens
 
     def generate_patch(self, context: str, objective: str) -> MiniMaxResult:
         system = (
-            "You are the implementation model in an SDD workflow. Return only a valid unified git diff. "
-            "Use the cited specification, code and tests. Do not invent files outside sample_project/."
+            "You are the implementation model in an SDD workflow. Reply with one unified git diff and nothing "
+            "else: no prose, no explanation, no code fences. The diff must apply to the files shown in the "
+            "engineering context with their exact current content. Do not touch files outside sample_project/."
         )
         payload = {
             "model": self.model,
@@ -44,7 +49,7 @@ class MiniMaxClient:
                 {"role": "user", "content": f"Objective:\n{objective}\n\nEngineering context:\n{context}"},
             ],
             "temperature": 1.0,
-            "max_tokens": 4096,
+            "max_tokens": self.max_tokens,
         }
         request = Request(
             self.api_url,
@@ -66,18 +71,34 @@ class MiniMaxClient:
             raise MiniMaxError(f"MiniMax returned HTTP {exc.code}: {_error_message(details)}") from exc
         except URLError as exc:
             raise MiniMaxError(f"Cannot reach MiniMax: {exc.reason}") from exc
-        try:
-            content = body["choices"][0]["message"]["content"]
-        except (KeyError, IndexError, TypeError) as exc:
+        choice = (body.get("choices") or [{}])[0] if isinstance(body, dict) else {}
+        message = choice.get("message") if isinstance(choice, dict) else None
+        content = (message or {}).get("content") if isinstance(message, dict) else None
+        if not content:
+            finish = choice.get("finish_reason") if isinstance(choice, dict) else None
+            if finish == "length":
+                raise MiniMaxError(
+                    f"MiniMax stopped at the {self.max_tokens}-token limit before writing the diff; "
+                    "raise MINIMAX_MAX_TOKENS"
+                )
             raise MiniMaxError(
-                f"MiniMax rejected the request: {_error_message(json.dumps(body, ensure_ascii=False))}"
-            ) from exc
+                f"MiniMax rejected the request: {_error_message(json.dumps(body, ensure_ascii=False))[:400]}"
+            )
+        patch = _strip_code_fence(str(content))
+        if not _looks_like_diff(patch):
+            head = patch.strip().splitlines()[0][:160] if patch.strip() else ""
+            raise MiniMaxError(f"MiniMax did not return a unified diff: {head!r}")
         return MiniMaxResult(
             model=str(body.get("model", self.model)),
-            content=_strip_code_fence(str(content)),
+            content=patch,
             request_id=request_id or str(body.get("id", "")),
             usage=dict(body.get("usage", {})),
         )
+
+
+def _looks_like_diff(content: str) -> bool:
+    head = content.strip().splitlines()[0] if content.strip() else ""
+    return head.startswith(("diff --git", "--- a/", "--- "))
 
 
 def _error_message(details: str) -> str:

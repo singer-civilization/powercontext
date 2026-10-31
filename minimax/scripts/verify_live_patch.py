@@ -15,7 +15,7 @@ PATCH = ROOT / "evidence" / "live" / "minimax.patch"
 def apply_patch(patch: Path, workdir: Path) -> subprocess.CompletedProcess[str]:
     for strip in ("-p1", "-p0"):
         result = subprocess.run(
-            ["git", "apply", strip, str(patch)],
+            ["git", "apply", "--recount", strip, str(patch)],
             cwd=workdir,
             check=False,
             capture_output=True,
