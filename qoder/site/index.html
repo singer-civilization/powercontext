@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ResearchVault · 笔记/论文速查</title>
+<style>
+  :root {
+    --ink: #1f2430;
+    --muted: #5b6472;
+    --accent: #2563eb;
+    --accent-soft: #eff4ff;
+    --line: #e3e7ee;
+    --code-bg: #10151f;
+    --code-ink: #d7e0ee;
+    --card-bg: #ffffff;
+    --page-bg: #f6f8fb;
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0;
+    background: var(--page-bg);
+    color: var(--ink);
+    font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB",
+                 "Microsoft YaHei", "Noto Sans CJK SC", sans-serif;
+    line-height: 1.75;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 860px; margin: 0 auto; padding: 0 24px; }
+  header.hero {
+    background: linear-gradient(160deg, #16223f 0%, #1e3a8a 55%, #2563eb 100%);
+    color: #fff;
+    padding: 72px 0 64px;
+  }
+  .hero .tag {
+    display: inline-block;
+    font-size: 13px;
+    letter-spacing: 0.12em;
+    border: 1px solid rgba(255,255,255,.45);
+    border-radius: 999px;
+    padding: 2px 14px;
+    margin-bottom: 18px;
+  }
+  .hero h1 { font-size: 44px; margin: 0 0 12px; letter-spacing: 0.01em; }
+  .hero p.sub { font-size: 19px; margin: 0; opacity: .92; max-width: 640px; }
+  nav.toc {
+    background: var(--card-bg);
+    border-bottom: 1px solid var(--line);
+    font-size: 14px;
+  }
+  nav.toc .wrap { display: flex; gap: 22px; padding-top: 10px; padding-bottom: 10px; flex-wrap: wrap; }
+  nav.toc a { color: var(--muted); text-decoration: none; }
+  nav.toc a:hover { color: var(--accent); }
+  section { padding: 52px 0 8px; }
+  h2 {
+    font-size: 26px;
+    margin: 0 0 6px;
+    padding-left: 14px;
+    border-left: 4px solid var(--accent);
+  }
+  p.lead { color: var(--muted); margin: 0 0 26px; }
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 18px; }
+  .card {
+    background: var(--card-bg);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 20px 22px;
+    box-shadow: 0 1px 2px rgba(16,24,40,.04);
+  }
+  .card h3 { margin: 0 0 8px; font-size: 17px; }
+  .card p { margin: 0; font-size: 14.5px; color: var(--muted); }
+  .card .num {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 28px; height: 28px; border-radius: 8px;
+    background: var(--accent-soft); color: var(--accent);
+    font-weight: 700; font-size: 14px; margin-bottom: 10px;
+  }
+  pre {
+    background: var(--code-bg);
+    color: var(--code-ink);
+    border-radius: 10px;
+    padding: 16px 18px;
+    overflow-x: auto;
+    font-size: 13.5px;
+    line-height: 1.7;
+    font-family: "SF Mono", Menlo, Consolas, "Courier New", monospace;
+  }
+  pre .c { color: #7d8ea8; }
+  pre .p { color: #7cc7ff; }
+  pre .o { color: #9ae6a3; }
+  .feat h3 { margin: 26px 0 8px; font-size: 18px; }
+  .feat .desc { color: var(--muted); font-size: 14.5px; margin: 0 0 10px; }
+  /* 流程图 */
+  .flow { display: flex; align-items: stretch; gap: 0; flex-wrap: wrap; margin: 8px 0 18px; }
+  .flow .node {
+    flex: 1 1 150px;
+    background: var(--card-bg);
+    border: 1.5px solid var(--accent);
+    border-radius: 10px;
+    padding: 14px 12px;
+    text-align: center;
+    min-width: 140px;
+  }
+  .flow .node b { display: block; font-size: 15px; margin-bottom: 4px; }
+  .flow .node span { font-size: 12.5px; color: var(--muted); }
+  .flow .arrow {
+    flex: 0 0 42px;
+    display: flex; align-items: center; justify-content: center;
+    color: var(--accent); font-size: 22px; font-weight: 700;
+  }
+  .flow .node.store { border-color: #0e9f6e; }
+  .flow .node.store b { color: #0e9f6e; }
+  .flow-caption { font-size: 13px; color: var(--muted); margin-top: -6px; }
+  ol.steps { padding-left: 22px; margin: 0 0 18px; }
+  ol.steps li { margin-bottom: 6px; }
+  footer {
+    margin-top: 64px;
+    background: #16223f;
+    color: #aab6cd;
+    font-size: 14px;
+    padding: 28px 0 32px;
+  }
+  footer a { color: #7cc7ff; text-decoration: none; }
+  footer a:hover { text-decoration: underline; }
+  @media (max-width: 640px) {
+    .hero h1 { font-size: 32px; }
+    .flow .arrow { flex-basis: 100%; height: 30px; transform: rotate(90deg); }
+  }
+</style>
+</head>
+<body>
+
+<header class="hero">
+  <div class="wrap">
+    <span class="tag">嵌入式 seekdb · 纯本地</span>
+    <h1>ResearchVault</h1>
+    <p class="sub">把散落的 Markdown/TXT 笔记与论文摘录导入嵌入式 seekdb，检索结果自带出处（文件 + 行号）的速查工具。</p>
+  </div>
+</header>
+
+<nav class="toc">
+  <div class="wrap">
+    <a href="#pain">痛点</a>
+    <a href="#features">核心功能</a>
+    <a href="#arch">架构</a>
+    <a href="#quickstart">快速开始</a>
+  </div>
+</nav>
+
+<div class="wrap">
+
+  <section id="pain">
+    <h2>解决的痛点</h2>
+    <p class="lead">复习和读文献时最浪费时间的不是「读」，是「找」。</p>
+    <div class="cards">
+      <div class="card">
+        <span class="num">1</span>
+        <h3>上学期的笔记找不到了</h3>
+        <p>只记得「大概在某个 .md 里提过」，目录一层层点开、编辑器全局搜索来回换，就是定位不到那段话。</p>
+      </div>
+      <div class="card">
+        <span class="num">2</span>
+        <h3>翻几十篇论文摘录找一句话</h3>
+        <p>摘录散落在几十个文件里，肉眼 grep 慢且没有排序；引文要回到原文核对，却连行号都不知道。</p>
+      </div>
+      <div class="card">
+        <span class="num">3</span>
+        <h3>工具链太重、数据还要上云</h3>
+        <p>Notion/Obsidian 插件链、向量库、云端索引对「查一句话」来说都过头了。ResearchVault 只有标准库 + 嵌入式 seekdb，数据全在本地 <code>.vault/</code>。</p>
+      </div>
+    </div>
+  </section>
+
+  <section id="features" class="feat">
+    <h2>核心功能</h2>
+    <p class="lead">三个命令覆盖「入库 → 检索 → 盘点」，统一入口 <code>python -m researchvault</code>。</p>
+
+    <h3>① add：递归导入，重复不重复计数</h3>
+    <p class="desc">目录里的 .md/.txt 按行窗口切块入库，记录相对路径、起始行号与校验和；内容没变的文件直接跳过。</p>
+<pre><span class="p">$</span> python -m researchvault add samples
+<span class="o">+</span> samples/数据库索引笔记.md（1 块）
+<span class="o">+</span> samples/机器学习复习提纲.md（1 块）
+<span class="o">+</span> samples/论文摘录_Attention_Is_All_You_Need.md（1 块）
+导入 3 个文件，跳过 0 个未变化文件</pre>
+
+    <h3>② search：带出处的关键词打分检索</h3>
+    <p class="desc">中英混合分词 + CJK 二元组召回，按分数降序输出「文件:行号 + 摘录」，行号可直接回到原文。</p>
+<pre><span class="p">$</span> python -m researchvault search "覆盖索引"
+samples/数据库索引笔记.md:13  [5.0]  - 覆盖索引：如果查询列全部包含在二级索引里，
+就不用回表。`EXPLAIN` 里显示 `Using index`。</pre>
+
+    <h3>③ stats：库存概览 / JSON 输出</h3>
+    <p class="desc">文档数、块数、最近导入时间一眼看清；所有命令支持 <code>--json</code>，方便接脚本。</p>
+<pre><span class="p">$</span> python -m researchvault stats
+文档数: 3
+块数:   3
+最近导入: 2026-10-31 17:13:40</pre>
+  </section>
+
+  <section id="arch">
+    <h2>架构说明</h2>
+    <p class="lead">没有服务进程：每条命令打开嵌入式 seekdb → 建表 → 执行 → 关闭。</p>
+    <div class="flow">
+      <div class="node">
+        <b>笔记 / 论文摘录</b>
+        <span>.md / .txt<br>本地目录</span>
+      </div>
+      <div class="arrow">→</div>
+      <div class="node">
+        <b>CLI</b>
+        <span>add / search / stats<br>argparse 标准库</span>
+      </div>
+      <div class="arrow">→</div>
+      <div class="node">
+        <b>切块器</b>
+        <span>行窗口 ≤40 行<br>记住起始行号</span>
+      </div>
+      <div class="arrow">→</div>
+      <div class="node store">
+        <b>嵌入式 seekdb</b>
+        <span>rv_documents<br>rv_chunks @ ./.vault/</span>
+      </div>
+      <div class="arrow">→</div>
+      <div class="node">
+        <b>打分排序 · 输出</b>
+        <span>LIKE 召回 +<br>Python 侧计分</span>
+      </div>
+    </div>
+    <p class="flow-caption">
+      检索链路：查询 → 分词（ASCII 词 + CJK 词组/二元组）→ <code>LIKE '%token%'</code> 从 rv_chunks 召回
+      → 出现次数求和 + 整串命中加成 → 按 (-分数, 文件, 行号) 排序输出。
+    </p>
+  </section>
+
+  <section id="quickstart">
+    <h2>快速开始</h2>
+    <p class="lead">要求 Python ≥ 3.11，三条命令跑通全流程：</p>
+    <ol class="steps">
+      <li><code>python3 -m venv .venv && source .venv/bin/activate && pip install -e '.[dev]'</code></li>
+      <li><code>python -m researchvault add samples/</code></li>
+      <li><code>python -m researchvault search "多头注意力"</code></li>
+    </ol>
+<pre><span class="p">$</span> python -m researchvault search "多头注意力" --limit 3
+samples/论文摘录_Attention_Is_All_You_Need.md:16  [5.0]  - 多头注意力让模型同时关注不同位置、不同表示子空间的信息。</pre>
+  </section>
+
+</div>
+
+<footer>
+  <div class="wrap">
+    <p>代码仓库：<a href="https://github.com/singer-civilization/powercontext/tree/qoder-efficiency/qoder">singer-civilization/powercontext · qoder-efficiency/qoder</a></p>
+    <p>ResearchVault · 标准库 + pylibseekdb，数据不出本机。</p>
+  </div>
+</footer>
+
+</body>
+</html>

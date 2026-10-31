@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "researchvault"
+version = "0.1.0"
+description = "把散落的 Markdown/TXT 笔记与论文摘录导入嵌入式 seekdb，带出处（文件:行号）的速查工具"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "ResearchVault" }]
+dependencies = [
+    "pylibseekdb>=1.4",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8",
+]
+
+[project.scripts]
+researchvault = "researchvault.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["researchvault*"]
