@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>EdgeVault · 端侧向量检索</title>
+<style>
+  :root { --ink:#1f2430; --muted:#5b6472; --accent:#2563eb; --soft:#eff4ff; --line:#e3e7ee; --bg:#f6f8fb; }
+  * { box-sizing: border-box; }
+  body { margin:0; font:15px/1.6 -apple-system,"PingFang SC","Helvetica Neue",sans-serif; color:var(--ink); background:var(--bg); }
+  header { background:#fff; border-bottom:1px solid var(--line); padding:18px 28px; display:flex; align-items:center; gap:16px; }
+  header h1 { font-size:18px; margin:0; }
+  header .sub { color:var(--muted); font-size:13px; }
+  .badge { margin-left:auto; display:flex; gap:8px; }
+  .tag { font-size:12px; padding:4px 10px; border-radius:999px; background:var(--soft); color:var(--accent); border:1px solid #d6e4ff; }
+  .tag.warn { background:#fff7ed; color:#b45309; border-color:#fed7aa; }
+  main { max-width:1040px; margin:0 auto; padding:24px 28px 60px; display:grid; gap:18px; }
+  .card { background:#fff; border:1px solid var(--line); border-radius:14px; padding:18px 20px; }
+  .row { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+  input[type=text] { flex:1; min-width:240px; padding:10px 12px; border:1px solid var(--line); border-radius:10px; font-size:15px; }
+  button { padding:10px 16px; border-radius:10px; border:1px solid var(--accent); background:var(--accent); color:#fff; font-size:14px; cursor:pointer; }
+  button.ghost { background:#fff; color:var(--accent); }
+  button:disabled { opacity:.5; cursor:not-allowed; }
+  .metrics { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:12px; margin-top:14px; }
+  .metric { border:1px solid var(--line); border-radius:10px; padding:10px 12px; }
+  .metric b { display:block; font-size:18px; }
+  .metric span { color:var(--muted); font-size:12px; }
+  .hit { border-top:1px dashed var(--line); padding:12px 0; }
+  .hit:first-child { border-top:none; }
+  .hit .src { color:var(--accent); font-size:13px; font-family:ui-monospace,Menlo,monospace; }
+  .hit .txt { margin-top:4px; }
+  .hit .dist { color:var(--muted); font-size:12px; }
+  .muted { color:var(--muted); font-size:13px; }
+  code { background:#0f1520; color:#d7e0ee; padding:1px 6px; border-radius:6px; font-size:93%; }
+</style>
+</head>
+<body>
+<header>
+  <h1>EdgeVault</h1>
+  <div class="sub">浏览器本地向量化 · seekdb 混合检索</div>
+  <div class="badge">
+    <span class="tag" id="backend">后端：检测中…</span>
+    <span class="tag" id="modelTag">模型：未加载</span>
+  </div>
+</header>
+
+<main>
+  <section class="card">
+    <div class="row">
+      <button id="initBtn">加载模型</button>
+      <button id="ingestBtn" class="ghost" disabled>导入示例笔记</button>
+      <label class="muted"><input type="checkbox" id="quantToggle" checked /> 使用 INT8 量化模型</label>
+      <span class="muted" id="hint">向量在浏览器里算，seekdb 只负责存和检索。</span>
+    </div>
+    <div class="metrics">
+      <div class="metric"><span>推理后端</span><b id="mBackend">-</b></div>
+      <div class="metric"><span>模型体积</span><b id="mSize">-</b></div>
+      <div class="metric"><span>加载耗时</span><b id="mLoad">-</b></div>
+      <div class="metric"><span>向量化速度</span><b id="mEmbed">-</b></div>
+      <div class="metric"><span>检索耗时</span><b id="mSearch">-</b></div>
+      <div class="metric"><span>已入库块数</span><b id="mChunks">-</b></div>
+    </div>
+  </section>
+
+  <section class="card">
+    <div class="row">
+      <input type="text" id="query" placeholder="问点什么，比如：覆盖索引为什么快？" />
+      <button id="searchBtn" disabled>检索</button>
+      <button id="compareBtn" class="ghost" disabled>量化前后对比</button>
+    </div>
+    <div id="results" style="margin-top:14px"><div class="muted">先加载模型、导入示例笔记。</div></div>
+  </section>
+</main>
+
+<script type="module" src="./app.js"></script>
+</body>
+</html>

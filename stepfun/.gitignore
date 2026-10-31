@@ -1,0 +1,3 @@
+node_modules/
+.seekdb/
+npm-debug.log*
