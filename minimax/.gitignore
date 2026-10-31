@@ -7,4 +7,6 @@
 __pycache__/
 *.pyc
 .sdd-context/
-evidence/live/
+evidence/live/*
+!evidence/live/minimax.patch
+!evidence/live/minimax.patch.json

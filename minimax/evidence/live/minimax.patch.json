@@ -1,0 +1,19 @@
+{
+  "provider": "MiniMax",
+  "model": "MiniMax-M3.1-Flash",
+  "request_id": "0734d11aac4a1d43c58d46a5f1c726da",
+  "usage": {
+    "total_tokens": 1540,
+    "total_characters": 0,
+    "prompt_tokens": 900,
+    "completion_tokens": 640,
+    "completion_tokens_details": {
+      "reasoning_tokens": 443
+    },
+    "prompt_tokens_details": {
+      "cached_tokens": 128
+    }
+  },
+  "context_sha256": "88094493927b95e02837441bbc129cd60c60cf359879c9a873cec9fd6990644c",
+  "patch": "evidence/live/minimax.patch"
+}

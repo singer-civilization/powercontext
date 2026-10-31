@@ -1,0 +1,19 @@
+diff --git a/sample_project/src/taskboard.py b/sample_project/src/taskboard.py
+--- a/sample_project/src/taskboard.py
++++ b/sample_project/src/taskboard.py
+@@ -10,7 +10,13 @@ class Task(TypedDict):
+     status: str
+ 
+ 
+-def list_tasks(tasks: Iterable[Task]) -> list[Task]:
+-    """Return every task as required by specification v1."""
+-    return list(tasks)
++def list_tasks(tasks: Iterable[Task], status: str = "all") -> list[Task]:
++    """Return tasks matching the requested status in their original order."""
++    if status not in ("all", "open", "done"):
++        raise ValueError(f"Unsupported status: {status!r}")
++
++    if status == "all":
++        return list(tasks)
++
++    return [task for task in tasks if task["status"] == status]
