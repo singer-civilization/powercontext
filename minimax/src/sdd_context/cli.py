@@ -100,8 +100,8 @@ def main(argv: list[str] | None = None) -> int:
         context = load_context(root, db_path, args.objective, args.task_id, True)
         client = MiniMaxClient(
             os.environ.get("MINIMAX_API_KEY", ""),
-            os.environ.get("MINIMAX_MODEL", "MiniMax-M2.7"),
-            os.environ.get("MINIMAX_API_URL", "https://api.minimaxi.com/v1/text/chatcompletion_v2"),
+            os.environ.get("MINIMAX_MODEL", "MiniMax-M3.1-Flash"),
+            os.environ.get("MINIMAX_API_URL", "https://api.minimaxi.com/v1/chat/completions"),
         )
         result = client.generate_patch(context, args.objective)
         args.output.parent.mkdir(parents=True, exist_ok=True)

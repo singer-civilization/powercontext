@@ -5,10 +5,11 @@
     "indexed v1 specification, code, and target tests",
     "refreshed the index with specification v2",
     "verified the same tests fail before and pass after",
-    "recovered task state after a full PowerContext server restart"
+    "recovered task state after a full PowerContext server restart",
+    "fixed MiniMax TLS with the certifi CA bundle and confirmed the request reaches api.minimaxi.com"
   ],
   "todo": [
-    "generate the implementation patch with a live MiniMax credential"
+    "generate the implementation patch with a live MiniMax credential (blocked: MiniMax account balance is CNY 0.00, every live model returns 402 insufficient balance)"
   ],
   "validation": {
     "before": "2 failed, 1 passed because list_tasks has no status parameter",
@@ -16,6 +17,8 @@
     "project_tests": "4 passed",
     "ruff": "all checks passed",
     "spec_refresh": "version 1 to 2; new checksum retrieved",
-    "powercontext_restart": "state recovered after server stop and fresh start"
+    "powercontext_restart": "state recovered after server stop and fresh start",
+    "minimax_live": "authentication accepted; MiniMax-M2.7/M2.5/M2 retired with 2069; default model now MiniMax-M3.1-Flash; live generation blocked by an empty wallet, evidence/live stays empty",
+    "live_patch_verifier": "scripts/verify_live_patch.py applies the live patch to the before snapshot and runs the target tests"
   }
 }

@@ -64,4 +64,12 @@ No inference provider was configured for PowerContext. Explicit Memory remember/
 
 ## MiniMax live call
 
-The HTTP client and request-context contract are tested locally. A live provider record is intentionally not fabricated: it must be produced with the participant's `MINIMAX_API_KEY` by running the README `generate` command. The resulting `evidence/live/minimax.patch.json` will contain the provider, model, request ID, usage, and context hash without the key.
+2026-10-31 15:30（Asia/Shanghai）在本机实测，结论：**链路通了，但账户余额为 0，真实生成还未发生**。`evidence/live/` 保持为空，不伪造 provider 记录。
+
+- **TLS**：旧实现用 `urlopen` 的默认上下文，首次调用报 `CERTIFICATE_VERIFY_FAILED`；改为 `ssl.create_default_context(cafile=certifi.where())` 并把 `certifi>=2025.1` 加入依赖后，请求可以正常到达 `api.minimaxi.com`。
+- **鉴权**：用平台 Key 请求 `/v1/chat/completions`，返回的是业务错误（模型不可用 / 余额不足）而不是 401，说明 Key 本身有效。
+- **模型**：`GET /v1/models` 当前返回 `MiniMax-M3.1-Flash`、`MiniMax-M3`、`MiniMax-M2.7`、`MiniMax-M2.7-highspeed`、`MiniMax-M2.5`、`MiniMax-M2.1`、`MiniMax-M2`。实际调用 `MiniMax-M2.7`、`MiniMax-M2.5`、`MiniMax-M2` 都返回 `2069 The model ... is no longer available`（列表里还在，但已不可调用），默认模型因此改为 `MiniMax-M3.1-Flash`。
+- **余额**：控制台显示可用额度 ¥0.00（现金余额、代金券、授信额度均为 0.00，无充值记录）。`MiniMax-M3.1-Flash` 与 `MiniMax-M3`、`MiniMax-Text-01` 均返回 `402 insufficient balance (1008)`。
+- **恢复方式**：充值后按 README 第 4 节执行 `sdd-context --root . generate ... --output evidence/live/minimax.patch`，会同时产出 `minimax.patch.json`（provider / model / request ID / usage / context SHA-256，不含 Key）；再用 `python scripts/verify_live_patch.py` 把这份 patch 打到 before 快照上跑目标测试，通过即闭环。
+
+`scripts/verify_live_patch.py` 的用例已用 before→after 快照的等价 diff 验证过：patch 能干净应用，目标测试 3 passed，脚本退出码 0。

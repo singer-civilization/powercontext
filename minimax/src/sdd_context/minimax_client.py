@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import json
+import ssl
 from dataclasses import dataclass
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
+
+import certifi
 
 
 class MiniMaxError(RuntimeError):
@@ -41,7 +44,7 @@ class MiniMaxClient:
                 {"role": "user", "content": f"Objective:\n{objective}\n\nEngineering context:\n{context}"},
             ],
             "temperature": 1.0,
-            "max_completion_tokens": 4096,
+            "max_tokens": 4096,
         }
         request = Request(
             self.api_url,
@@ -54,24 +57,43 @@ class MiniMaxClient:
             method="POST",
         )
         try:
-            with urlopen(request, timeout=180) as response:
+            ssl_context = ssl.create_default_context(cafile=certifi.where())
+            with urlopen(request, timeout=180, context=ssl_context) as response:
                 body = json.loads(response.read().decode("utf-8"))
                 request_id = response.headers.get("x-request-id", "")
         except HTTPError as exc:
             details = exc.read().decode("utf-8", errors="replace")
-            raise MiniMaxError(f"MiniMax returned HTTP {exc.code}: {details}") from exc
+            raise MiniMaxError(f"MiniMax returned HTTP {exc.code}: {_error_message(details)}") from exc
         except URLError as exc:
             raise MiniMaxError(f"Cannot reach MiniMax: {exc.reason}") from exc
         try:
             content = body["choices"][0]["message"]["content"]
         except (KeyError, IndexError, TypeError) as exc:
-            raise MiniMaxError(f"Unexpected MiniMax response shape: {body}") from exc
+            raise MiniMaxError(
+                f"MiniMax rejected the request: {_error_message(json.dumps(body, ensure_ascii=False))}"
+            ) from exc
         return MiniMaxResult(
             model=str(body.get("model", self.model)),
             content=_strip_code_fence(str(content)),
             request_id=request_id or str(body.get("id", "")),
             usage=dict(body.get("usage", {})),
         )
+
+
+def _error_message(details: str) -> str:
+    """Return the human-readable reason from a MiniMax error envelope."""
+    try:
+        payload = json.loads(details)
+    except (TypeError, ValueError):
+        return details.strip()
+    if isinstance(payload, dict):
+        error = payload.get("error")
+        if isinstance(error, dict) and error.get("message"):
+            return str(error["message"])
+        base = payload.get("base_resp")
+        if isinstance(base, dict) and base.get("status_msg"):
+            return f"{base.get('status_code')} {base['status_msg']}"
+    return details.strip()
 
 
 def _strip_code_fence(content: str) -> str:

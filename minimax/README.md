@@ -76,8 +76,8 @@ sdd-context state-load task-filter
 
 ```bash
 export MINIMAX_API_KEY='<your-key>'
-export MINIMAX_MODEL='MiniMax-M2.7'
-export MINIMAX_API_URL='https://api.minimaxi.com/v1/text/chatcompletion_v2'
+export MINIMAX_MODEL='MiniMax-M3.1-Flash'
+export MINIMAX_API_URL='https://api.minimaxi.com/v1/chat/completions'
 
 sdd-context --root . generate \
   'Implement the v2 task status filter and make done-filter tests pass' \
@@ -85,7 +85,9 @@ sdd-context --root . generate \
   --output evidence/live/minimax.patch
 ```
 
-该命令不会自动修改工作树，便于先审查 `minimax.patch`。旁边的 `minimax.patch.json` 是可提交的最小调用证据；它记录 provider/model/request ID/usage/context SHA-256。默认模型、URL 和请求字段来自 [MiniMax M2.7 官方接入示例](https://www.minimaxi.com/models/text/m27)；模型或网关变化时只需调整两个环境变量。
+平台会下架旧模型 id：`MiniMax-M2.7`、`MiniMax-M2.5`、`MiniMax-M2` 现在都返回 `2069 The model ... is no longer available`。换模型前先用 `curl -H "Authorization: Bearer $MINIMAX_API_KEY" https://api.minimaxi.com/v1/models` 查当前可用列表；账户余额为 0 时接口返回 `402 insufficient balance (1008)`。
+
+该命令不会自动修改工作树，便于先审查 `minimax.patch`；`python scripts/verify_live_patch.py` 会把这份 patch 打到 before 快照上跑目标测试。旁边的 `minimax.patch.json` 是可提交的最小调用证据；它记录 provider/model/request ID/usage/context SHA-256。默认模型、URL 和请求字段来自 [MiniMax 模型列表](https://platform.minimaxi.com/docs/faq/models) 与 OpenAI 兼容的 `/v1/chat/completions`；模型或网关变化时只需调整两个环境变量。
 
 ## 5. 验证
 
