@@ -1,0 +1,279 @@
+app:
+  description: 一间会记住你的酒馆——NPC 记得你上次点的酒、说过的话，下次进门接着聊。
+  icon: 🍺
+  icon_background: '#FFEAD5'
+  mode: advanced-chat
+  name: 记忆酒馆 Memory Tavern
+  use_icon_as_answer_icon: false
+dependencies: []
+kind: app
+version: 0.3.1
+workflow:
+  conversation_variables: []
+  environment_variables: []
+  features:
+    file_upload:
+      enabled: false
+    opening_statement: 推开吱呀作响的木门，老板抬头：“又见面了。”
+    retriever_resource:
+      enabled: false
+    sensitive_word_avoidance:
+      enabled: false
+    speech_to_text:
+      enabled: false
+    suggested_questions:
+    - 老板，还记得我上次点什么吗？
+    - 给我讲讲这间酒馆的规矩
+    - 我今天有点累
+    suggested_questions_after_answer:
+      enabled: false
+    text_to_speech:
+      enabled: false
+  graph:
+    edges:
+    - data: {isInIteration: false, isInLoop: false, sourceType: start, targetType: http-request}
+      id: e1
+      source: start_node
+      sourceHandle: source
+      target: recall_node
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    - data: {isInIteration: false, isInLoop: false, sourceType: http-request, targetType: code}
+      id: e2
+      source: recall_node
+      sourceHandle: source
+      target: compose_node
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    - data: {isInIteration: false, isInLoop: false, sourceType: code, targetType: http-request}
+      id: e3
+      source: compose_node
+      sourceHandle: source
+      target: llm_node
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    - data: {isInIteration: false, isInLoop: false, sourceType: http-request, targetType: code}
+      id: e4
+      source: llm_node
+      sourceHandle: source
+      target: parse_node
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    - data: {isInIteration: false, isInLoop: false, sourceType: code, targetType: http-request}
+      id: e5
+      source: parse_node
+      sourceHandle: source
+      target: remember_node
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    - data: {isInIteration: false, isInLoop: false, sourceType: http-request, targetType: answer}
+      id: e6
+      source: remember_node
+      sourceHandle: source
+      target: answer_node
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    nodes:
+    - data:
+        desc: ''
+        selected: false
+        title: Start
+        type: start
+        variables:
+        - label: 客人说的话
+          max_length: 512
+          options: []
+          required: true
+          type: paragraph
+          variable: question
+      height: 90
+      id: start_node
+      position: {x: 0, y: 245}
+      positionAbsolute: {x: 0, y: 245}
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 244
+    - data:
+        desc: 从 PowerContext 取回与本次发言相关的旧记忆
+        title: 回忆
+        type: http-request
+        method: POST
+        url: http://host.docker.internal:8000/v1/memory/search
+        authorization: {type: no-auth}
+        headers: 'Content-Type: application/json'
+        params: ''
+        body:
+          type: json
+          data: '{"scope_id": "scp_7f4cqa0evmrpw7hrqa0a9mh5t2", "query": "{{#start_node.question#}}", "limit": 5, "mode": "auto"}'
+        timeout: {connect: 10, read: 30, write: 30}
+        retry_config:
+          enabled: false
+          max_retries: 1
+          retry_interval: 1000
+          exponential_backoff: {enabled: false, multiplier: 2, max_interval: 10000}
+      height: 90
+      id: recall_node
+      position: {x: 304, y: 245}
+      positionAbsolute: {x: 304, y: 245}
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 244
+    - data:
+        code_language: javascript
+        code: |
+          function main({ question, memory }) {
+            let mem = "";
+            try {
+              const j = JSON.parse(memory);
+              const hits = j.hits || [];
+              mem = hits.map(h => "- " + String(h.text || "").replace(/\n/g, " ").slice(0, 160)).join("\n");
+            } catch (e) { mem = ""; }
+            const system = "你是「记忆酒馆」的老板，开了四十年店的老酒保。说话简短、有点冷幽默，每次回答不超过 80 个汉字。\n" +
+              "下面是你记得的、和这位客人有关的旧事（可能为空）：\n" + (mem || "（没有任何记录）") + "\n" +
+              "规则：记忆里出现过这位客人的偏好、点过的酒或心事，就自然带进对话，不要生硬复述；记忆为空就当第一次见，问他一句来历；不要解释你是 AI。";
+            return {
+              payload: JSON.stringify({
+                model: "MiniMax-M3.1-Flash",
+                messages: [
+                  { role: "system", content: system },
+                  { role: "user", content: question }
+                ],
+                temperature: 0.8,
+                max_tokens: 512
+              })
+            };
+          }
+        desc: 把旧记忆和这句话拼成 MiniMax 的请求体
+        outputs:
+          payload: {type: string, children: null}
+        selected: false
+        title: 拼请求
+        type: code
+        variables:
+        - value_selector: [start_node, question]
+          variable: question
+        - value_selector: [recall_node, body]
+          variable: memory
+      height: 90
+      id: compose_node
+      position: {x: 608, y: 245}
+      positionAbsolute: {x: 608, y: 245}
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 244
+    - data:
+        desc: 调用 MiniMax（OpenAI 兼容接口）
+        title: MiniMax 生成
+        type: http-request
+        method: POST
+        url: https://api.minimaxi.com/v1/chat/completions
+        authorization:
+          type: api-key
+          config:
+            type: bearer
+            api_key: __MINIMAX_API_KEY__
+        headers: 'Content-Type: application/json'
+        params: ''
+        body:
+          type: raw-text
+          data: '{{#compose_node.payload#}}'
+        timeout: {connect: 10, read: 120, write: 30}
+        retry_config:
+          enabled: false
+          max_retries: 1
+          retry_interval: 1000
+          exponential_backoff: {enabled: false, multiplier: 2, max_interval: 10000}
+      height: 90
+      id: llm_node
+      position: {x: 912, y: 245}
+      positionAbsolute: {x: 912, y: 245}
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 244
+    - data:
+        code_language: javascript
+        code: |
+          function main({ body }) {
+            const data = JSON.parse(body);
+            const message = (data.choices && data.choices[0] && data.choices[0].message) || {};
+            return { text: String(message.content || "").trim() };
+          }
+        desc: 从 OpenAI 兼容响应里取出回答
+        outputs:
+          text: {type: string, children: null}
+        selected: false
+        title: 取回答
+        type: code
+        variables:
+        - value_selector: [llm_node, body]
+          variable: body
+      height: 90
+      id: parse_node
+      position: {x: 1216, y: 245}
+      positionAbsolute: {x: 1216, y: 245}
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 244
+    - data:
+        desc: 把这一轮写回 PowerContext，下次进店还能想起来
+        title: 记住这一轮
+        type: http-request
+        method: POST
+        url: http://host.docker.internal:8000/v1/memory/remember
+        authorization: {type: no-auth}
+        headers: 'Content-Type: application/json'
+        params: ''
+        body:
+          type: json
+          data: '{"scope_id": "scp_7f4cqa0evmrpw7hrqa0a9mh5t2", "kind": "tavern_turn", "text": "客人说：{{#start_node.question#}} / 老板答：{{#parse_node.text#}}", "reason": "记住酒馆里这一轮对话，供下次进店复用"}'
+        timeout: {connect: 10, read: 30, write: 30}
+        retry_config:
+          enabled: false
+          max_retries: 1
+          retry_interval: 1000
+          exponential_backoff: {enabled: false, multiplier: 2, max_interval: 10000}
+      height: 90
+      id: remember_node
+      position: {x: 1520, y: 245}
+      positionAbsolute: {x: 1520, y: 245}
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 244
+    - data:
+        answer: '{{#parse_node.text#}}'
+        desc: ''
+        selected: false
+        title: 回答
+        type: answer
+        variables: []
+      height: 90
+      id: answer_node
+      position: {x: 1824, y: 245}
+      positionAbsolute: {x: 1824, y: 245}
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 244
+    viewport:
+      x: 0
+      y: 0
+      zoom: 0.7
