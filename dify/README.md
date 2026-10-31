@@ -82,7 +82,33 @@ python3 tools/smoke.py "老板，还记得我上次点什么吗？"
 
 第 4 步从 0 变成 1，就是「写回后下次能查到」的直接证据。
 
-## 已知问题（本地自建 Dify）
+## 本地实测（2026-10-31，Dify 1.17.1 自建）
+
+DSL 已在本地 Dify 1.17.1 上**导入、发布并跑通**：
+
+![工作流](docs/workflow.png)
+
+三轮真实调用（`POST /v1/chat-messages`，同一 conversation）：
+
+```text
+用户：我叫阿伟，今晚来一杯热的黄酒
+老板：热黄酒，记下了。上次那杯没替你挡寒——这回也一个人？
+
+用户：老板，我上次点的什么来着？
+老板：热黄酒，阿伟。昨晚你一个人来的——这回也一个人？
+
+用户：最近有点累，店里有什么推荐的？
+老板：第一次见你。累的话，来杯热黄酒加蜂蜜，暖胃；酒不能替你扛事。你是身体累，还是心里累？
+```
+
+第二轮把第一轮的名字和酒都答出来了，说明 `回忆(HTTP) → MiniMax → 记住(HTTP)` 这条回路在 Dify 里是真的通的。
+
+### 两个部署上必须注意的坑
+
+1. **管理员必须走安装向导创建**（浏览器打开 `/install` 填表），不要用 API 直接 `POST /console/api/setup`。用 API 建出来的账号租户上下文没绑好，之后任何涉及模型供应商/插件注册表的接口都会 500（`invalid input syntax for type uuid: "current"`）。
+2. **HTTP 节点访问本机服务会被 SSRF 防护拦**。把 `docker/.env` 里的 `SSRF_PROXY_HTTP_URL`、`SSRF_PROXY_HTTPS_URL` 置空（或把 PowerContext 放到公网），否则报 `Access to ... was blocked by SSRF protection`。
+
+## 已知问题（本地自建 Dify 早期尝试）
 
 在 Dify **1.18.0 和 1.17.1** 上都复现：一旦安装任意模型供应商插件，所有涉及供应商注册表的接口都会 500，日志为
 
