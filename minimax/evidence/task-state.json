@@ -1,0 +1,21 @@
+{
+  "task_id": "task-filter",
+  "objective": "Implement the v2 task status filter from the refreshed specification",
+  "completed": [
+    "indexed v1 specification, code, and target tests",
+    "refreshed the index with specification v2",
+    "verified the same tests fail before and pass after",
+    "recovered task state after a full PowerContext server restart"
+  ],
+  "todo": [
+    "generate the implementation patch with a live MiniMax credential"
+  ],
+  "validation": {
+    "before": "2 failed, 1 passed because list_tasks has no status parameter",
+    "after": "3 passed",
+    "project_tests": "4 passed",
+    "ruff": "all checks passed",
+    "spec_refresh": "version 1 to 2; new checksum retrieved",
+    "powercontext_restart": "state recovered after server stop and fresh start"
+  }
+}
