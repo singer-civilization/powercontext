@@ -401,6 +401,111 @@ def test_explicit_statement_facets_survive_repetitive_financial_notes(
     asyncio.run(scenario())
 
 
+@pytest.mark.parametrize("title_position", ["first", "last"])
+@pytest.mark.parametrize("metric", ["inventory turnover", "return on assets", "gross margins"])
+def test_original_statements_survive_prose_references_and_reordered_pdf_titles(
+    title_position: str, metric: str
+) -> None:
+    async def scenario() -> None:
+        registry = SourceDefinitionRegistry((PDF_PAGE_SOURCE_DEFINITION,))
+        async with open_builtin_runtime(BuiltinConfig(), candidate_pipeline=_PagePipeline()) as runtime:
+            assert runtime.scopes is not None
+            scope = await runtime.scopes.create(
+                ScopeDraft(title="Original statements", summary="PDF text order", idempotency_key="statement-order")
+            )
+            await runtime.ingestion.register(manifest_for_definition(PDF_PAGE_SOURCE_DEFINITION))
+            rows = "\n".join(f"Financial line {number} 100 90" for number in range(40))
+            statements = (
+                ("Consolidated Statements of Income", "Revenue 900 800\nCost of sales 600 550\nNet income 100 90"),
+                ("Consolidated Balance Sheets", "Inventory 80 70\nTotal assets 1200 1000"),
+            )
+            texts = [
+                f"{title}\n2024 2023\n{body}\n{rows}"
+                if title_position == "first"
+                else f"2024 2023\n{body}\n{rows}\n{title}"
+                for title, body in statements
+            ]
+            texts.extend(
+                f"Accounting policy note {number}\n"
+                "Consolidated Statements of Income within our accounting system reflect current business results.\n"
+                "Consolidated Balance Sheets include many accounts subject to management estimates.\n"
+                + f"Net income, revenue, total assets and inventory affect {metric} in 2024. "
+                * 6
+                for number in range(25)
+            )
+            expected_sources = set()
+            for number, text in enumerate(texts, 1):
+                page = PDFPageInput(
+                    document_id="ACME_2024_10K", document_sha256="a" * 64, page_number=number, text=text
+                )
+                observation = project_source_for_transport(registry, await registry.resolve(page))
+                if number == 1 or (number == 2 and metric != "gross margins"):
+                    expected_sources.add(observation.name)
+                await runtime.ingestion.submit(
+                    SubmitSourceObservation(scope_id=scope.scope_id, observation=observation)
+                )
+            memory = runtime.memory.for_scope(scope.scope_id)
+            while (await memory.flush()).processed:
+                pass
+            sources = set()
+            for citation in await search_pdf_pages(memory, f"What are ACME's {metric} for FY2024?", limit=2):
+                record = await memory.get(GetMemoryEntryRequest(citation=citation))
+                sources.update(source.source_id for source in record.entry.sources)
+            assert expected_sources <= sources
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    "title",
+    [
+        "CONSOLIDATED STATEMENTS OF STOCKHOLDERS' EQUITY",
+        "CONSOLIDATED STATEMENTS OF STOCKHOLDERS\u2019 EQUITY",
+        "CONSOLIDATED STATEMENTS OF CHANGES IN SHAREHOLDERS' EQUITY",
+        "CONSOLIDATED STATEMENTS OF CHANGES IN OWNERS\u2019 EQUITY",
+        "CONSOLIDATED STATEMENTS OF CHANGES IN EQUITY",
+        "CONSOLIDATED STATEMENTS OF STOCKHOLDERS' EQUITY AND NONCONTROLLING INTERESTS",
+        "CONSOLIDATED STATEMENTS OF STOCKHOLDERS\u2019 EQUITY (DEFICIT)",
+    ],
+)
+def test_complete_equity_statement_titles_recall_original_table(title: str) -> None:
+    async def scenario() -> None:
+        registry = SourceDefinitionRegistry((PDF_PAGE_SOURCE_DEFINITION,))
+        async with open_builtin_runtime(BuiltinConfig(), candidate_pipeline=_PagePipeline()) as runtime:
+            assert runtime.scopes is not None
+            scope = await runtime.scopes.create(
+                ScopeDraft(title="Equity statement", summary="Complete title", idempotency_key="equity-title")
+            )
+            await runtime.ingestion.register(manifest_for_definition(PDF_PAGE_SOURCE_DEFINITION))
+            texts = (
+                f"{title}\n2024 2023\nCommon stock 100 90\nRetained earnings 300 250\nTotal equity 400 340",
+                "Accounting policy note\n"
+                + "Changes in equity in 2024 reflect estimates of stockholders' equity. " * 6,
+            )
+            expected_source = None
+            for number, text in enumerate(texts, 1):
+                page = PDFPageInput(
+                    document_id="ACME_2024_10K", document_sha256="a" * 64, page_number=number, text=text
+                )
+                observation = project_source_for_transport(registry, await registry.resolve(page))
+                if number == 1:
+                    expected_source = observation.name
+                await runtime.ingestion.submit(
+                    SubmitSourceObservation(scope_id=scope.scope_id, observation=observation)
+                )
+            memory = runtime.memory.for_scope(scope.scope_id)
+            while (await memory.flush()).processed:
+                pass
+            citations = await search_pdf_pages(
+                memory, "Locate ACME's statements of changes in equity for 2024.", limit=1
+            )
+            assert len(citations) == 1
+            record = await memory.get(GetMemoryEntryRequest(citation=citations[0]))
+            assert record.entry.sources[0].source_id == expected_source
+
+    asyncio.run(scenario())
+
+
 @pytest.mark.parametrize("combined", [False, True])
 @pytest.mark.parametrize("contents_style", ["page-references", "exhibit-index"])
 def test_contents_entries_do_not_displace_actual_or_combined_statements(combined: bool, contents_style: str) -> None:
@@ -503,8 +608,145 @@ def test_explicit_companies_and_reporting_year_keep_both_requested_reports() -> 
 
 
 @pytest.mark.parametrize(
+    ("document_ids", "question", "expected_ids"),
+    [
+        (
+            ("ACME_2021_10K", "ACME_2023Q1_EARNINGS", "OTHER_2023Q1_EARNINGS"),
+            "What guidance did ACME give in FY2023Q1?",
+            {"ACME_2023Q1_EARNINGS"},
+        ),
+        (
+            (
+                "ALPHA_BETA_2022_10K",
+                "ALPHA_BETA_2023_8K_dated-2023-05-05",
+                "OTHER_2023_8K_dated-2023-05-05",
+            ),
+            "What happened with Alpha Beta's shareholder proposal in 2023?",
+            {"ALPHA_BETA_2023_8K_dated-2023-05-05"},
+        ),
+        (
+            ("ACME_2023_10-K", "ACME_2024_Q1_EARNINGS_RELEASE", "OTHER_2024_10K"),
+            "What guidance did ACME give for FY2024Q1?",
+            {"ACME_2024_Q1_EARNINGS_RELEASE"},
+        ),
+        (
+            ("ACME_2024_10K", "OTHER_2024_10K", "arbitrary-document-identifier"),
+            "What guidance did ACME give for 2024?",
+            {"ACME_2024_10K", "arbitrary-document-identifier"},
+        ),
+        (
+            ("first-document", "second-document"),
+            "What guidance did ACME give for 2024?",
+            {"first-document", "second-document"},
+        ),
+        (
+            ("ALPHABETIC_2024_10K", "OTHER_2024_10K"),
+            "What guidance did ALP give for 2024?",
+            {"ALPHABETIC_2024_10K"},
+        ),
+        (
+            ("ALPHABETIC_2024_10K", "ALPHABETSOUP_2024_10K", "OTHER_2024_10K"),
+            "What guidance did ALP give for 2024?",
+            {"ALPHABETIC_2024_10K", "ALPHABETSOUP_2024_10K", "OTHER_2024_10K"},
+        ),
+        (
+            ("ALPHABETIC_2024_10K", "OTHER_2024_10K"),
+            "What guidance did alp give for 2024?",
+            {"ALPHABETIC_2024_10K", "OTHER_2024_10K"},
+        ),
+        (
+            ("ALPHABETIC_2024_10K", "OTHER_2024_10K"),
+            "What guidance did xALPx give for 2024?",
+            {"ALPHABETIC_2024_10K", "OTHER_2024_10K"},
+        ),
+        (
+            ("NETWORKS_2024_10K", "COGSWORTH_2024_10K", "EPSILON_2024_10K", "OTHER_2024_10K"),
+            "What guidance was given about NET income, COGS and EPS for 2024?",
+            {"NETWORKS_2024_10K", "COGSWORTH_2024_10K", "EPSILON_2024_10K", "OTHER_2024_10K"},
+        ),
+        (
+            ("BRAVO_BRAVO_2024_10K", "OTHER_2024_10K"),
+            "What guidance did B-n-B give for 2024?",
+            {"BRAVO_BRAVO_2024_10K"},
+        ),
+        (
+            ("BRAVO_BRAVO_2024_10K", "OTHER_2024_10K"),
+            "What guidance did B&B give for 2024?",
+            {"BRAVO_BRAVO_2024_10K"},
+        ),
+        (
+            ("ACME_BETA_2024_10K", "OTHER_2024_10K"),
+            "What guidance did A-n-B give for 2024?",
+            {"ACME_BETA_2024_10K", "OTHER_2024_10K"},
+        ),
+        (
+            ("USDATA_2024_10K", "OTHER_2024_10K"),
+            "What guidance was reported in USD for 2024?",
+            {"USDATA_2024_10K", "OTHER_2024_10K"},
+        ),
+        (
+            ("USANA_2024_10K", "OTHER_2024_10K"),
+            "What guidance was reported for USA operations in 2024?",
+            {"USANA_2024_10K", "OTHER_2024_10K"},
+        ),
+        (
+            ("RED_OAK_ENTERPRISES_2024_10K", "OTHER_2024_10K"),
+            "What guidance was given for ROE in 2024?",
+            {"RED_OAK_ENTERPRISES_2024_10K", "OTHER_2024_10K"},
+        ),
+    ],
+)
+def test_company_routing_separates_reporting_periods_and_preserves_opaque_identifiers(
+    document_ids: tuple[str, ...], question: str, expected_ids: set[str]
+) -> None:
+    async def scenario() -> None:
+        registry = SourceDefinitionRegistry((PDF_PAGE_SOURCE_DEFINITION,))
+        async with open_builtin_runtime(BuiltinConfig(), candidate_pipeline=_PagePipeline()) as runtime:
+            assert runtime.scopes is not None
+            scope = await runtime.scopes.create(
+                ScopeDraft(title="Report metadata", summary="Document routing", idempotency_key="report-metadata")
+            )
+            await runtime.ingestion.register(manifest_for_definition(PDF_PAGE_SOURCE_DEFINITION))
+            expected_sources = set()
+            for document_id in document_ids:
+                page = PDFPageInput(
+                    document_id=document_id,
+                    document_sha256="a" * 64,
+                    page_number=1,
+                    text="Management guidance and the shareholder proposal are discussed in this disclosure.",
+                )
+                observation = project_source_for_transport(registry, await registry.resolve(page))
+                if document_id in expected_ids:
+                    expected_sources.add(observation.name)
+                await runtime.ingestion.submit(
+                    SubmitSourceObservation(scope_id=scope.scope_id, observation=observation)
+                )
+            memory = runtime.memory.for_scope(scope.scope_id)
+            while (await memory.flush()).processed:
+                pass
+            sources = set()
+            for citation in await search_pdf_pages(memory, question, limit=20):
+                record = await memory.get(GetMemoryEntryRequest(citation=citation))
+                sources.update(source.source_id for source in record.entry.sources)
+            assert sources == expected_sources
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
     ("metric", "expected_pages"),
     [
+        ("capital intensity", {1, 2, 3}),
+        ("capital intensiveness", {1, 2, 3}),
+        ("total debt", {2}),
+        ("long-term debt", {2}),
+        ("short term borrowings", {2}),
+        ("debt-to-equity ratio", {2}),
+        ("inventory turnover", {1, 2}),
+        ("stock turnover", {1, 2}),
+        ("PPNE", {2}),
+        ("PPE", {2}),
+        ("PP&E", {2}),
         ("return on equity", {1, 2}),
         ("ROE", {1, 2}),
         ("return on assets", {1, 2}),
@@ -515,8 +757,11 @@ def test_explicit_companies_and_reporting_year_keep_both_requested_reports() -> 
         ("interest coverage ratio", {1}),
         ("effective tax rate", {1}),
         ("net income margin", {1}),
+        ("net profit margins", {1}),
         ("gross profit margin", {1}),
+        ("gross margins", {1}),
         ("operating profit margin", {1}),
+        ("operating margins", {1}),
     ],
 )
 def test_accounting_metrics_recall_required_statements_among_repetitive_notes(
@@ -533,12 +778,17 @@ def test_accounting_metrics_recall_required_statements_among_repetitive_notes(
             texts = [
                 (
                     "Consolidated Statements of Income\n2024 2023\nRevenue 1200 1000\nCost of goods sold 800 700\n"
-                    "Gross profit 400 300\nOperating income 300 240\nInterest expense 50 40\n"
+                    "Cost of sales 800 700\nGross profit 400 300\nOperating income 300 240\nInterest expense 50 40\n"
                     "Income before taxes 250 200\nIncome tax expense 50 40\nNet income 200 160"
                 ),
                 (
                     "Consolidated Balance Sheets\n2024 2023\nCash 100 80\nTotal assets 1800 1600\n"
-                    "Debt 400 350\nTotal liabilities 800 700\nShareholders equity 1000 900"
+                    "Debt 400 350\nInventory 200 180\nProperty plant and equipment 900 800\n"
+                    "Total liabilities 800 700\nShareholders equity 1000 900"
+                ),
+                (
+                    "Consolidated Statements of Cash Flows\n2024 2023\nNet income 200 160\n"
+                    "Depreciation and amortization 50 40\nCapital expenditures 120 100"
                 ),
                 *[
                     f"Accounting policy note {number}\n"
@@ -598,6 +848,58 @@ def test_liquidity_metrics_without_a_year_recall_underlying_balance_sheet(metric
             assert len(citations) == 1
             record = await memory.get(GetMemoryEntryRequest(citation=citations[0]))
             assert record.entry.sources[0].source_id == observation.name
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    ("question", "text"),
+    [
+        (
+            "How exposed is the company to cyclicality?",
+            "Risk factors\nCustomer demand is cyclical and follows economic business cycles.",
+        ),
+        (
+            "What were the acquisitions?",
+            "Business combinations\nThe purchase price consideration included goodwill and intangible assets.",
+        ),
+        (
+            "Describe the spin-off.",
+            "Discontinued operations\nThe separation and sale of the business completed.",
+        ),
+        (
+            "What was PPNE?",
+            "Consolidated Balance Sheets\nProperty, plant and equipment 400\nTotal assets 900",
+        ),
+    ],
+)
+def test_financial_synonyms_recall_original_evidence_without_the_question_word(question: str, text: str) -> None:
+    async def scenario() -> None:
+        registry = SourceDefinitionRegistry((PDF_PAGE_SOURCE_DEFINITION,))
+        async with open_builtin_runtime(BuiltinConfig(), candidate_pipeline=_PagePipeline()) as runtime:
+            assert runtime.scopes is not None
+            scope = await runtime.scopes.create(
+                ScopeDraft(title="Financial synonyms", summary="Original evidence", idempotency_key="synonyms")
+            )
+            await runtime.ingestion.register(manifest_for_definition(PDF_PAGE_SOURCE_DEFINITION))
+            expected_source = None
+            for number, body in enumerate((text, "Employee training and recreational facilities."), 1):
+                page = PDFPageInput(
+                    document_id="ACME_2024_10K", document_sha256="a" * 64, page_number=number, text=body
+                )
+                observation = project_source_for_transport(registry, await registry.resolve(page))
+                if number == 1:
+                    expected_source = observation.name
+                await runtime.ingestion.submit(
+                    SubmitSourceObservation(scope_id=scope.scope_id, observation=observation)
+                )
+            memory = runtime.memory.for_scope(scope.scope_id)
+            while (await memory.flush()).processed:
+                pass
+            citations = await search_pdf_pages(memory, question, limit=1)
+            assert len(citations) == 1
+            record = await memory.get(GetMemoryEntryRequest(citation=citations[0]))
+            assert record.entry.sources[0].source_id == expected_source
 
     asyncio.run(scenario())
 

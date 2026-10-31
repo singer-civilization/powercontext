@@ -185,6 +185,18 @@ _CONCEPTS: tuple[tuple[str, tuple[str, ...]], ...] = (
         ),
     ),
     (
+        r"\b(?:cyclic\w*|cycles?)\b",
+        ("cyclical", "cycle", "economic", "business", "demand", "risk"),
+    ),
+    (
+        r"\b(?:acquisitions?|acquir\w*|business\s+combinations?|mergers?)\b",
+        ("acquisition", "business combinations", "merger", "purchase price", "consideration", "goodwill"),
+    ),
+    (
+        r"\b(?:spin[\s-]*offs?|spun[\s-]*off|divest\w*|disposals?)\b",
+        ("spin off", "separation", "divestiture", "disposal", "discontinued operations", "sale of business"),
+    ),
+    (
         r"\b(?:ebitda|operating\s+(?:income|profit)|income\s+statements?|statements?\s+of\s+income|"
         r"p\s*&\s*l|profit\s+and\s+loss)\b",
         (
@@ -254,6 +266,27 @@ _CONCEPTS: tuple[tuple[str, tuple[str, ...]], ...] = (
 # the complementary statements needed to calculate them.
 _ACCOUNTING_METRICS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
     (
+        r"\b(?:inventory|stock)[\s-]+turnover\b",
+        ("inventory", "cost of goods sold", "cost of products sold", "cost of sales", "cost of revenue", "COGS"),
+        ("income", "balance"),
+    ),
+    (
+        r"\b(?:ppne|ppe|pp\s*&\s*e)\b",
+        ("property plant equipment", "property plant and equipment", "net property", "fixed assets"),
+        ("balance",),
+    ),
+    (
+        r"\bcapital[\s-]+intens(?:ity|ive|iveness)\b",
+        ("property plant equipment", "capital expenditures", "revenue", "net sales", "total assets"),
+        ("income", "balance", "cashflow"),
+    ),
+    (
+        r"\b(?:net|total|(?:short|long)[\s-]+term)\s+(?:debts?|borrowings?)\b|"
+        r"\bdebt[\s-]+to[\s-]+(?:equity|assets)\b",
+        ("debt", "borrowings", "current portion", "current liabilities", "total assets", "equity"),
+        ("balance",),
+    ),
+    (
         r"\b(?:current\s+ratio|working\s+capital)\b",
         ("current assets", "current liabilities"),
         ("balance",),
@@ -294,17 +327,17 @@ _ACCOUNTING_METRICS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = 
         ("income",),
     ),
     (
-        r"\bnet\s+(?:(?:income|profit)\s+)?margin\b",
+        r"\bnet\s+(?:(?:income|profit)\s+)?margins?\b",
         ("net income", "revenue", "net sales"),
         ("income",),
     ),
     (
-        r"\bgross\s+(?:profit\s+)?margin\b",
-        ("gross profit", "revenue", "net sales", "cost of goods sold"),
+        r"\bgross\s+(?:profit\s+)?margins?\b",
+        ("gross profit", "revenue", "net sales", "cost of goods sold", "cost of products sold", "cost of revenue"),
         ("income",),
     ),
     (
-        r"\boperating\s+(?:profit\s+)?margin\b",
+        r"\boperating\s+(?:profit\s+)?margins?\b",
         ("operating income", "operating profit", "revenue", "net sales"),
         ("income",),
     ),
@@ -333,6 +366,51 @@ _DOCUMENT_WORDS = frozenset({
     "holding",
     "group",
 })
+_NON_COMPANY_ABBREVIATIONS = frozenset({
+    "apac",
+    "aud",
+    "cagr",
+    "cad",
+    "capex",
+    "ceo",
+    "chf",
+    "chn",
+    "cfo",
+    "cogs",
+    "coo",
+    "cny",
+    "ebit",
+    "ebitda",
+    "emea",
+    "eps",
+    "esg",
+    "etr",
+    "eur",
+    "fasb",
+    "fcf",
+    "gaap",
+    "gbp",
+    "gbr",
+    "hkd",
+    "iasb",
+    "ifrs",
+    "jpy",
+    "latam",
+    "nzd",
+    "opex",
+    "ppe",
+    "ppne",
+    "roa",
+    "roe",
+    "roic",
+    "rmb",
+    "sec",
+    "sgd",
+    "sga",
+    "uae",
+    "usa",
+    "usd",
+})
 _HEADING_PREFIX = r"(?im)^\s*(?:(?:consolidated|condensed|combined|unaudited|audited)\s+)*"
 # Anchored headings distinguish a statement itself from notes discussing it.
 # These roles are derived from original page text, never from page-number lists.
@@ -341,11 +419,13 @@ _STATEMENT_PATTERNS = {
     r"(?:income|profit\s+and\s+loss)\s+statements?)\b",
     "cashflow": _HEADING_PREFIX + r"(?:statements?\s+of\s+cash\s+flows?|cash\s+flow\s+statements?)\b",
     "balance": _HEADING_PREFIX + r"(?:balance\s+sheets?|statements?\s+of\s+financial\s+position)\b",
-    "equity": _HEADING_PREFIX + r"statements?\s+of\s+(?:changes\s+in\s+)?(?:stockholders|shareholders|owners|equity)\b",
+    "equity": _HEADING_PREFIX + r"statements?\s+of\s+(?:changes\s+in\s+)?"
+    r"(?:(?:stockholders?|shareholders?|owners?)(?:['\u2019\u02bc]s?)?\s+)?equity"
+    r"(?:\s+and\s+(?:non[\s-]?controlling|minority)\s+interests?)?\b",
     "comprehensive": _HEADING_PREFIX + r"statements?\s+of\s+(?:other\s+)?comprehensive\s+income\b",
 }
 _STATEMENT_QUESTIONS = {
-    "income": r"\b(?:ebitda|ebit|operating\s+(?:income|profits?)|(?:gross|net|profit)\s+margin|"
+    "income": r"\b(?:ebitda|ebit|operating\s+(?:income|profits?)|(?:gross|net|profit)\s+margins?|"
     r"income\s+statements?|statements?\s+of\s+(?:income|operations|earnings)|p\s*&\s*l|profit\s+and\s+loss)\b",
     "cashflow": r"\b(?:ebitda|cash\s*flows?|capex|capital\s+expenditur\w*|depreciat\w*|amorti[sz]\w*|d\s*&\s*a)\b",
     "balance": r"\b(?:balance\s+sheets?|financial\s+position|current\s+ratio|quick\s+ratio|working\s+capital|"
@@ -369,6 +449,8 @@ class _Page:
 def _stem(term: str) -> str:
     # A small conservative English normalizer avoids an extra NLP/model
     # dependency while keeping numerical tokens and short identifiers intact.
+    if term in {"cycle", "cycles"} or term.startswith("cyclic"):
+        return "cycle"
     if term.endswith("ies") and len(term) > 4:
         return term[:-3] + "y"
     if term.endswith("sses"):
@@ -379,8 +461,9 @@ def _stem(term: str) -> str:
 
 
 def _tokens(text: str) -> tuple[str, ...]:
-    text = unicodedata.normalize("NFKC", text).casefold()
-    text = re.sub(r"\bfy\s*(\d{2,4})\b", r"\1", text)
+    text = unicodedata.normalize("NFKC", text).casefold().replace("_", " ")
+    text = re.sub(r"\bfy\s*(\d{2,4})(?=\b|[qh][1-4]\b)", r"\1", text)
+    text = re.sub(r"\b(\d{2,4})([qh][1-4])\b", r"\1 \2", text)
     text = text.replace("amortisation", "amortization")
     return tuple(_stem(term) for term in _TOKEN.findall(text))
 
@@ -407,10 +490,16 @@ def _query(question: str) -> tuple[dict[str, float], tuple[dict[str, float], ...
 
 
 def _statement_headings(text: str) -> dict[str, int]:
-    heading = unicodedata.normalize("NFKC", "\n".join(text.splitlines()[:35]))
+    # PDF drawing order can put a real table's title after its final row. Scan
+    # the full page, but require an isolated title rather than a prose reference
+    # such as "Consolidated Balance Sheets include ..." in an accounting note.
+    heading = unicodedata.normalize("NFKC", text)
     roles = {}
     for role, pattern in _STATEMENT_PATTERNS.items():
-        for match in re.finditer(pattern, heading):
+        title_end = (
+            r"(?:[ \t]*[\u2014\u2013,:-]?[ \t]*(?:\((?:continued|unaudited|audited|loss|deficit)\)|continued))*[ \t]*$"
+        )
+        for match in re.finditer(pattern + title_end, heading):
             remainder = heading[match.end() :]
             # Contents listings carry dot leaders or an isolated physical/
             # printed page reference. A repeated "Table of Contents" link at
@@ -432,11 +521,40 @@ def _statement_headings(text: str) -> dict[str, int]:
 
 
 def _document_name(document_id: str) -> tuple[str, ...]:
+    # A document identifier is otherwise opaque. Only infer a company from the
+    # prefix before recognizable reporting metadata, rather than treating a
+    # filing type, earnings-release suffix or publication date as its name.
+    tokens = _tokens(document_id)
+    boundary = next(
+        (
+            index
+            for index, term in enumerate(tokens)
+            if re.fullmatch(r"(?:19|20|21)\d{2}|(?:10|20|40|8|6)[kqf]", term)
+            or (term in {"10", "20", "40", "8", "6"} and tokens[index + 1 : index + 2] in {("k",), ("q",), ("f",)})
+        ),
+        None,
+    )
+    if boundary is None:
+        return ()
     return tuple(
         term
-        for term in _tokens(document_id)
-        if not term.isdigit() and term not in _DOCUMENT_WORDS and term not in _STOP_WORDS
+        for term in tokens[:boundary]
+        if not term.isdigit()
+        and not re.fullmatch(r"[qh][1-4]", term)
+        and term not in _DOCUMENT_WORDS
+        and term not in _STOP_WORDS
     )
+
+
+def _company_aliases(company: tuple[str, ...], excluded: set[str]) -> set[str]:
+    aliases = {"".join(company)}
+    if len(company) > 1:
+        acronym = "".join(term[0] for term in company)
+        if acronym not in _STOP_WORDS and acronym not in _DOCUMENT_WORDS and acronym not in excluded:
+            aliases.add(acronym)
+        if len(company) == 2 and company[0] == company[1]:
+            aliases.add(f"{company[0][0]}n{company[1][0]}")
+    return aliases - {""}
 
 
 def _route_pages(pages: tuple[_Page, ...], question: str) -> tuple[_Page, ...]:
@@ -461,22 +579,32 @@ def _route_pages(pages: tuple[_Page, ...], question: str) -> tuple[_Page, ...]:
         for expansion in expansions
         for term in _tokens(expansion)
     }
+    financial_terms.update(_tokens(" ".join(_NON_COMPANY_ABBREVIATIONS)))
     for document_id, company in documents.items():
         # An identifier such as EQUITY must not make an ordinary financial
         # noun into an explicit company request and discard the other reports.
         if company and all(term in financial_terms for term in company):
             continue
-        aliases = {"".join(company)}
-        if len(company) > 1:
-            acronym = "".join(term[0] for term in company)
-            if acronym not in _STOP_WORDS and acronym not in _DOCUMENT_WORDS:
-                aliases.add(acronym)
-        if company and (aliases - {""}) & names:
+        if _company_aliases(company, financial_terms) & names:
             matched.setdefault(company, set()).add(document_id)
+    # Abbreviated names are weaker evidence than full names. Accept only an
+    # explicit uppercase word whose prefix identifies one company in scope;
+    # ordinary financial acronyms must never discard unrelated reports.
+    companies = {company for company in documents.values() if company}
+    for abbreviation in re.findall(r"(?<!\w)[A-Z]{3,}(?!\w)", question):
+        alias = _stem(abbreviation.casefold())
+        if alias in financial_terms or alias in _STOP_WORDS or alias in _DOCUMENT_WORDS:
+            continue
+        candidates = {company for company in companies if "".join(company).startswith(alias)}
+        if len(candidates) == 1:
+            company = next(iter(candidates))
+            matched.setdefault(company, set()).update(doc for doc, name in documents.items() if name == company)
     if not matched:
         return pages
     years = {term for term in _tokens(question) if re.fullmatch(r"(?:19|20|21)\d{2}", term)}
-    preferred = set()
+    # A free-form identifier supplies no reliable company or period metadata.
+    # Keep those documents eligible instead of assuming they belong elsewhere.
+    preferred = {document_id for document_id, company in documents.items() if not company}
     for documents_in_company in matched.values():
         current = {doc for doc in documents_in_company if years.intersection(_tokens(doc))}
         preferred.update(current or documents_in_company)

@@ -19,14 +19,33 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import re
 import zlib
 from collections.abc import Iterator
-from typing import Annotated, Literal, cast
+from contextlib import ExitStack
+from dataclasses import dataclass
+from typing import Annotated, Literal, Self, cast
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 from pypdf import PageObject, PdfReader, get_configuration
+from pypdf._font import Font
+from pypdf._text_extraction import get_text_operands
 from pypdf.filters import decode_stream_data
-from pypdf.generic import ArrayObject, ContentStream, DictionaryObject, NameObject, NullObject, PdfObject, StreamObject
+from pypdf.generic import (
+    ArrayObject,
+    ContentStream,
+    DictionaryObject,
+    EncodedStreamObject,
+    FloatObject,
+    NameObject,
+    NullObject,
+    NumberObject,
+    PdfObject,
+    StreamObject,
+    TextStringObject,
+    create_string_object,
+)
+from typing_extensions import override
 
 from powercontext.sources.definitions import AdapterSourceDefinition, SourceDefinition
 from powercontext.sources.models import Source, SourceMaterialization
@@ -35,6 +54,8 @@ from powercontext.sources.projections import TEXT_EVIDENCE_PROJECTION_KEY, TextE
 
 _DocumentSHA256 = Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
 _PhysicalPageNumber = Annotated[int, Field(ge=1, strict=True)]
+_TEXT_POSITION_RESETS = frozenset({b"BT", b"ET", b"Tm", b"Td", b"TD", b"T*", b"'", b'"'})
+_TEXT_SHOW_OPERATORS = frozenset({b"Tj", b"TJ", b"'", b'"'})
 
 
 class PDFDocumentInput(BaseModel):
@@ -108,8 +129,19 @@ def _page_text(page: PageObject) -> str:
     inherited: list[tuple[DictionaryObject, PdfObject | None]] = []
     try:
         _bind_resources(page, resources, inherited)
-        _validate_content(page.get("/Contents"), page, resources, resources, set(), set(), inherited)
-        return page.extract_text() or ""
+        with ExitStack() as restore:
+            stream = _prepare_content(
+                page.get("/Contents"), page, resources, resources, set(), set(), inherited, restore
+            )
+            contents = NameObject("/Contents")
+            if contents in page:
+                restore.callback(page.__setitem__, contents, page.raw_get(contents))
+            else:
+                restore.callback(page.__delitem__, contents)
+            page[contents] = stream
+            forms = _FormFontInheritance(page, resources)
+            restore.callback(forms.close)
+            return page.extract_text(visitor_operand_before=forms.before, visitor_operand_after=forms.after) or ""
     finally:
         # A legacy Form can occur on several pages with different fonts. Keep
         # the repair local to this extraction instead of changing the reader's
@@ -119,6 +151,203 @@ def _page_text(page: PageObject) -> str:
                 del obj["/Resources"]
             else:
                 obj[NameObject("/Resources")] = previous
+
+
+class _FormFontInheritance:
+    """Expose each invocation's inherited font to pypdf's independent Form extractor."""
+
+    def __init__(self, page: PageObject, resources: DictionaryObject) -> None:
+        self.page = page
+        self.resources = resources
+        self.font: PdfObject | None = None
+        self.size = 12.0
+        self.graphics: list[tuple[PdfObject | None, float]] = []
+        self.invocations: list[ExitStack | None] = []
+        self.actual_text = _ActualText(self)
+
+    def before(self, operator: bytes, operands: list[PdfObject], cm: list[float], tm: list[float]) -> None:
+        if operator == b"q":
+            self.graphics.append((self.font, self.size))
+        elif operator == b"Q" and self.graphics:
+            self.font, self.size = self.graphics.pop()
+        elif operator == b"Tf" and len(operands) >= 2:
+            fonts = self.resources.get("/Font", DictionaryObject()).get_object()
+            self.font = cast(DictionaryObject, fonts).get(operands[0])
+            self.size = float(cast(FloatObject | NumberObject, operands[1]))
+        elif operator == b"Do":
+            xobjects = cast(DictionaryObject, self.resources["/XObject"])
+            form = cast(StreamObject, xobjects[operands[0]].get_object())
+            if form.get("/Subtype") == "/Form":
+                self._enter(form)
+            else:
+                self.invocations.append(None)
+        self.actual_text.before(operator, operands, cm, tm)
+
+    def _enter(self, form: StreamObject) -> None:
+        restore = ExitStack()
+        self.invocations.append(restore)
+        restore.callback(setattr, self, "resources", self.resources)
+        restore.callback(setattr, self, "font", self.font)
+        restore.callback(setattr, self, "size", self.size)
+        restore.callback(setattr, self, "graphics", self.graphics)
+        self.graphics = self.graphics.copy()
+        # Preparation has already supplied legacy Forms' missing resources.
+        resources = cast(DictionaryObject, form["/Resources"])
+        self.resources = resources
+        if self.font is None:
+            return
+        inherited_resources = DictionaryObject(resources)
+        fonts = DictionaryObject(cast(DictionaryObject, resources.get("/Font", DictionaryObject()).get_object()))
+        alias = NameObject("/PowerContextInheritedFont")
+        while alias in fonts:
+            alias = NameObject(str(alias) + "_")
+        fonts[alias] = self.font
+        inherited_resources[NameObject("/Font")] = fonts
+        restore.callback(form.__setitem__, NameObject("/Resources"), form.raw_get("/Resources"))
+        form[NameObject("/Resources")] = inherited_resources
+        self.resources = inherited_resources
+        prepared = ContentStream(form, self.page.pdf, "bytes")
+        # Tf is a graphics-state parameter retained across BT/ET. Repeating
+        # its inherited value is equivalent, including when the Form later
+        # selects its own font. A fresh view is needed for each shared Do.
+        prepared.operations = [
+            ([], b"BT"),
+            ([alias, FloatObject(self.size)], b"Tf"),
+            ([], b"ET"),
+            *prepared.operations,
+        ]
+        if isinstance(form, EncodedStreamObject):
+            restore.callback(setattr, form, "decoded_self", form.decoded_self)
+            form.decoded_self = prepared
+        else:
+            restore.callback(form.set_data, form.get_data())
+            form.set_data(prepared.get_data())
+
+    def after(self, operator: bytes, _operands: list[PdfObject], _cm: list[float], _tm: list[float]) -> None:
+        self.actual_text.restore_operands()
+        if operator == b"Do":
+            restore = self.invocations.pop()
+            if restore is not None:
+                restore.close()
+
+    def close(self) -> None:
+        self.actual_text.restore_operands()
+        while self.invocations:
+            restore = self.invocations.pop()
+            if restore is not None:
+                restore.close()
+
+
+class _ActualTextOperand(TextStringObject):
+    """Logical replacement text with the original glyphs' width bookkeeping."""
+
+    _glyphs: str
+
+    def __new__(cls, text: str, glyphs: str) -> Self:
+        value = super().__new__(cls, text)
+        value._glyphs = glyphs
+        return value
+
+    @override
+    def __iter__(self) -> Iterator[str]:
+        # Fixed pypdf 6.19 concatenates a string operand, then iterates it to
+        # measure advances. ActualText changes the logical string, not the
+        # painted glyph widths. The fallback is used during base construction.
+        return iter(getattr(self, "_glyphs", str(self)))
+
+
+@dataclass
+class _ActualTextSpan:
+    text: str
+    emitted: bool = False
+
+
+class _ActualText:
+    """Apply standard marked-content replacement text without altering state."""
+
+    def __init__(self, forms: _FormFontInheritance) -> None:
+        self.forms = forms
+        self.spans: list[_ActualTextSpan | None] = []
+        self.fonts: dict[int, Font] = {}
+        self.modified: list[tuple[list[PdfObject], int, PdfObject]] = []
+
+    def restore_operands(self) -> None:
+        for values, index, value in reversed(self.modified):
+            values[index] = value
+        self.modified.clear()
+
+    def before(self, operator: bytes, operands: list[PdfObject], cm: list[float], tm: list[float]) -> None:
+        if operator in (b"BDC", b"BMC"):
+            text = self._text(operands[1]) if operator == b"BDC" and len(operands) > 1 else None
+            self.spans.append(_ActualTextSpan(text) if text is not None else None)
+        elif operator == b"EMC":
+            if self.spans:
+                self.spans.pop()
+        elif operator in _TEXT_SHOW_OPERATORS:
+            span = next((span for span in self.spans if span is not None), None)
+            if span is not None and operands:
+                self._replace(operator, operands, span, cm, tm)
+
+    def _text(self, properties: PdfObject | None) -> str | None:
+        if properties is None:
+            return None
+        properties = properties.get_object()
+        if isinstance(properties, NameObject):
+            definitions = self.forms.resources.get("/Properties", DictionaryObject()).get_object()
+            if not isinstance(definitions, DictionaryObject) or properties not in definitions:
+                return None
+            properties = definitions[properties].get_object()
+        if not isinstance(properties, DictionaryObject):
+            return None
+        value = properties.get("/ActualText")
+        if value is None or isinstance(value.get_object(), NullObject):
+            return None
+        value = value.get_object()
+        if isinstance(value, bytes):
+            value = create_string_object(value)
+        if not isinstance(value, TextStringObject):
+            raise TypeError("PDF ActualText must be a text string")  # noqa: TRY003
+        return str(value)
+
+    def _replace(
+        self, operator: bytes, operands: list[PdfObject], span: _ActualTextSpan, cm: list[float], tm: list[float]
+    ) -> None:
+        if operator == b"TJ":
+            if not isinstance(operands[0], ArrayObject):
+                return
+            values = operands[0]
+            indices = range(len(values))
+        else:
+            values = operands
+            indices = range(2, min(3, len(values))) if operator == b'"' else range(min(1, len(values)))
+        for index in indices:
+            value = values[index]
+            if operator == b"TJ" and isinstance(value, (NumberObject, FloatObject)):
+                # Fixed pypdf 6.19 uses TJ adjustments only to infer spaces;
+                # it does not apply them to its text matrix. ActualText
+                # already supplies all logical whitespace for this span.
+                self.modified.append((values, index, value))
+                values[index] = NumberObject(0)
+                continue
+            if not isinstance(value, (bytes, TextStringObject)) or not value:
+                continue
+            glyphs = self._glyphs(value, cm, tm)
+            self.modified.append((values, index, value))
+            values[index] = _ActualTextOperand("" if span.emitted else span.text, glyphs)
+            span.emitted = True
+
+    def _glyphs(self, value: bytes | TextStringObject, cm: list[float], tm: list[float]) -> str:
+        reference = self.forms.font
+        if reference is None:
+            return value.decode("charmap") if isinstance(value, bytes) else str(value)
+        source = cast(DictionaryObject, reference.get_object())
+        font = self.fonts.get(id(source))
+        if font is None:
+            font = Font.from_font_resource(source)
+            self.fonts[id(source)] = font
+        # This fixed-pypdf helper accepts byte operands despite its str hint.
+        glyphs, _ = get_text_operands([cast(str, value)], cm, tm, font, (0, 90, 180, 270))
+        return glyphs
 
 
 def _page_resources(page: PageObject) -> DictionaryObject:
@@ -162,7 +391,7 @@ def _bind_resources(
     return resources
 
 
-def _validate_content(
+def _prepare_content(
     content: PdfObject | None,
     page: PageObject,
     resources: DictionaryObject,
@@ -170,8 +399,14 @@ def _validate_content(
     ancestors: set[int],
     validated_forms: set[int],
     inherited: list[tuple[DictionaryObject, PdfObject | None]],
-) -> None:
-    for operands, operator in _content_operations(content, page):
+    restore: ExitStack,
+) -> ContentStream:
+    fonts = resources.get("/Font")
+    if fonts is not None and isinstance(fonts.get_object(), NullObject):
+        restore.callback(resources.__setitem__, NameObject("/Font"), resources.raw_get("/Font"))
+        del resources["/Font"]
+    stream = _content_stream(content, page)
+    for operands, operator in stream.operations:
         if operator != b"Do":
             continue
         xobjects = cast(DictionaryObject, resources["/XObject"].get_object())
@@ -183,7 +418,7 @@ def _validate_content(
             raise ValueError("PDF Form content must not be cyclic")  # noqa: TRY003
         if identity in validated_forms:
             continue
-        _validate_content(
+        prepared = _prepare_content(
             xobject,
             page,
             _bind_resources(xobject, page_resources, inherited),
@@ -191,20 +426,71 @@ def _validate_content(
             ancestors | {identity},
             validated_forms,
             inherited,
+            restore,
         )
+        # Keep the original encoded bytes and restore the extraction view after
+        # this page. A shared Form can be invoked again under another page's
+        # resources, and filtered streams must retain their original filters.
+        if isinstance(xobject, EncodedStreamObject):
+            restore.callback(setattr, xobject, "decoded_self", xobject.decoded_self)
+            xobject.decoded_self = prepared
+        else:
+            restore.callback(xobject.set_data, xobject.get_data())
+            xobject.set_data(prepared.get_data())
         validated_forms.add(identity)
+    _normalize_text_positions(stream)
+    return stream
 
 
-def _content_operations(content: PdfObject | None, page: PageObject) -> Iterator[tuple[list[PdfObject], bytes]]:
+def _discard_unused_text_adjustments(stream: ContentStream) -> None:
+    operations = list(stream.operations)
+    reset_before_next_show = True
+    for index in range(len(operations) - 1, -1, -1):
+        operands, operator = operations[index]
+        if operator == b"TJ" and reset_before_next_show and operands and isinstance(operands[0], ArrayObject):
+            values = list(operands[0])
+            # A terminal adjustment whose text matrix is never reused has no
+            # rendered effect, but pypdf infers a word gap from it anyway.
+            while values and isinstance(values[-1], (int, float)):
+                values.pop()
+            operations[index] = ([ArrayObject(values)], operator)
+        if operator in _TEXT_POSITION_RESETS:
+            reset_before_next_show = True
+        elif operator in _TEXT_SHOW_OPERATORS:
+            reset_before_next_show = False
+    stream.operations = operations
+
+
+def _normalize_text_positions(stream: ContentStream) -> None:
+    _discard_unused_text_adjustments(stream)
+    normalized = []
+    needs_initial_position = False
+    for operands, operator in stream.operations:
+        if operator == b"BT":
+            needs_initial_position = True
+        elif operator in _TEXT_POSITION_RESETS:
+            needs_initial_position = False
+        elif operator in _TEXT_SHOW_OPERATORS:
+            if needs_initial_position:
+                # BT already sets both text matrices to identity. Make that
+                # reset visible before the first glyph so pypdf consumes a
+                # changed CTM before displaying a partial word from a TJ array.
+                normalized.append(([NumberObject(value) for value in (1, 0, 0, 1, 0, 0)], b"Tm"))
+            needs_initial_position = False
+        normalized.append((operands, operator))
+    stream.operations = normalized
+
+
+def _content_stream(content: PdfObject | None, page: PageObject) -> ContentStream:
     # pypdf treats a malformed /Contents scalar as an empty page even in strict
-    # mode. Its Flate and RunLength decoders can also recover only part of a
-    # damaged stream, and its text extractor suppresses errors in nested Forms.
+    # mode. Its filter decoders can also recover unterminated or partial
+    # streams, and its text extractor suppresses errors in nested Forms.
     # Validate these evidence-bearing streams before accepting a whole page.
     if content is None:
-        return
+        return ContentStream(None, page.pdf, "bytes")
     content = content.get_object()
     if content is None or isinstance(content, NullObject):
-        return
+        return ContentStream(None, page.pdf, "bytes")
     streams = content if isinstance(content, ArrayObject) else (content,)
     for reference in streams:
         stream = reference.get_object()
@@ -214,7 +500,7 @@ def _content_operations(content: PdfObject | None, page: PageObject) -> Iterator
             raise TypeError("PDF page Contents must contain streams")  # noqa: TRY003
         _validate_encoded_stream(stream)
 
-    yield from ContentStream(content, page.pdf).operations
+    return ContentStream(content, page.pdf, "bytes")
 
 
 def _validate_encoded_stream(stream: StreamObject) -> None:
@@ -228,10 +514,19 @@ def _validate_encoded_stream(stream: StreamObject) -> None:
         parameters = parameters.get_object()
     for index, filter_name in enumerate(filters):
         filter_name = filter_name.get_object()
-        if filter_name not in ("/FlateDecode", "/Fl", "/RunLengthDecode", "/RL"):
+        if filter_name not in (
+            "/FlateDecode",
+            "/Fl",
+            "/RunLengthDecode",
+            "/RL",
+            "/ASCII85Decode",
+            "/A85",
+            "/ASCIIHexDecode",
+            "/AHx",
+        ):
             continue
         # Decode any preceding layers through pypdf, including their predictor
-        # parameters. Check the compressed bytes before its recovery fallback.
+        # parameters. Check each encoded layer before its recovery fallback.
         prefix = StreamObject()
         prefix._data = stream._data  # pypdf exposes no raw stream-data accessor.
         prefix[NameObject("/Filter")] = ArrayObject(filters[:index])
@@ -242,8 +537,18 @@ def _validate_encoded_stream(stream: StreamObject) -> None:
         data = decode_stream_data(prefix)
         if filter_name in ("/RunLengthDecode", "/RL"):
             _validate_run_length(data)
+        elif filter_name in ("/ASCII85Decode", "/A85", "/ASCIIHexDecode", "/AHx"):
+            _validate_ascii_end_marker(data, base85=filter_name in ("/ASCII85Decode", "/A85"))
         else:
             _validate_deflate(data)
+
+
+def _validate_ascii_end_marker(data: bytes, *, base85: bool) -> None:
+    # ISO 32000-1, 7.4.2-3 require > or ~>; whitespace is ignored. Do not
+    # require the marker to occupy the final bytes of the stream.
+    complete = re.search(rb"~[\x00\t\n\f\r ]*>", data) is not None if base85 else b">" in data
+    if not complete:
+        raise ValueError("PDF ASCII-encoded content is missing its end marker")  # noqa: TRY003
 
 
 def _validate_run_length(data: bytes) -> None:
