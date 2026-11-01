@@ -119,3 +119,17 @@ PluginDaemonInternalServerError: ... ERROR: invalid input syntax for type uuid: 
 表现为：模型供应商页面打不开、DSL 导入失败、工作流草稿保存失败。试过换版本、补 `X-Workspace-Id`/`X-Tenant-Id` 头、从市场安装与上传 `.difypkg` 安装，都没绕过。
 
 因此本作品把模型调用放在 HTTP Request 节点里，DSL 不带 provider 依赖——这也让它在评审自己的 Dify 上更容易一次导入成功。
+
+
+## 引擎执行记录（Dify 真实运行）
+
+`evidence/workflow-runs.json` 是从 Dify 控制台 API 导出的会话与消息记录，每条消息都带
+`workflow_run_id`，可在 Dify「日志」页按 id 查到对应的节点执行轨迹：
+
+- `0f39df97-59a2-4fc9-b762-58ecd64db218` ← “最近有点累，店里有什么推荐的？”
+- `cbc673c7-0306-4795-857a-3f11f7e340ba` ← “老板，我上次点的什么来着？”
+- `d7987624-f6c1-4284-b597-4d41087a5814` ← “我叫阿伟，今晚来一杯热的黄酒”
+
+导出方式（Dify 本地实例）：`GET /console/api/apps/<app_id>/chat-conversations` 再按
+`conversation_id` 取 `/chat-messages`。`tools/smoke.py` 只是本地自检脚本，**不是**这些
+对话的来源。
