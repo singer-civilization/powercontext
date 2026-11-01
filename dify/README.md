@@ -120,16 +120,17 @@ PluginDaemonInternalServerError: ... ERROR: invalid input syntax for type uuid: 
 
 因此本作品把模型调用放在 HTTP Request 节点里，DSL 不带 provider 依赖——这也让它在评审自己的 Dify 上更容易一次导入成功。
 
-
 ## 引擎执行记录（Dify 真实运行）
 
-`evidence/workflow-runs.json` 是从 Dify 控制台 API 导出的会话与消息记录，每条消息都带
-`workflow_run_id`，可在 Dify「日志」页按 id 查到对应的节点执行轨迹：
+`evidence/workflow-runs.json` 由 Dify 控制台 API 导出（app `459f14ce…`），每条消息带 `workflow_run_id`，可在 Dify「日志」页按 id 查节点轨迹：
 
-- `0f39df97-59a2-4fc9-b762-58ecd64db218` ← “最近有点累，店里有什么推荐的？”
-- `cbc673c7-0306-4795-857a-3f11f7e340ba` ← “老板，我上次点的什么来着？”
-- `d7987624-f6c1-4284-b597-4d41087a5814` ← “我叫阿伟，今晚来一杯热的黄酒”
+- `f05e041e-3395-4bb7-a6c2-0c0d8a12bb31` ← “最近有点累，有什么推荐？”
+- `7d0a64c8-7d71-4873-b6dc-e9fee95f9448` ← “老板，我上次点的什么来着？”
+- `e7d54819-fbfa-42c8-9d65-8bde05b80e60` ← “我叫阿伟，今晚来一杯热的黄酒”
 
-导出方式（Dify 本地实例）：`GET /console/api/apps/<app_id>/chat-conversations` 再按
-`conversation_id` 取 `/chat-messages`。`tools/smoke.py` 只是本地自检脚本，**不是**这些
-对话的来源。
+`tools/smoke.py` 只是本地自检脚本，**不是**这些对话的来源。
+
+## 安全性
+
+- PowerContext 地址与 scope 走 Dify 应用环境变量（`POWERCONTEXT_URL` / `POWERCONTEXT_SCOPE_ID`），不写死在流程里；未填 scope 时流程直接报错。
+- 所有 HTTP 节点的请求体都由 Code 节点 `JSON.stringify` 生成，用户输入不参与字符串拼接，避免 JSON 注入。

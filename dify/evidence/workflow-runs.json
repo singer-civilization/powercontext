@@ -1,115 +1,45 @@
 {
-  "app_id": "e951d14d-110a-4351-a820-9db78ed3bce2",
+  "app_id": "459f14ce-09a1-4083-a545-511f460f3842",
   "conversations": [
     {
-      "conversation_id": "dd1d33b1-8ed2-449d-841d-e96e53a86b1c",
-      "name": "最近有点累，店里有什么推荐的？",
+      "conversation_id": "e3e144b7-e2f9-4059-97f2-5eade5d623b0",
+      "name": "最近有点累，有什么推荐？",
       "messages": [
         {
-          "id": "831bce23-cc6f-435f-8edb-5942f8ef6fd3",
-          "workflow_run_id": "0f39df97-59a2-4fc9-b762-58ecd64db218",
-          "query": "最近有点累，店里有什么推荐的？",
-          "answer": "第一次见你。累的话，来杯热黄酒加蜂蜜，暖胃；酒不能替你扛事。你是身体累，还是心里累？",
-          "created_at": 1793448377,
+          "id": "54b38b4d-f77c-4aaf-ab4c-20a761f08f2f",
+          "workflow_run_id": "f05e041e-3395-4bb7-a6c2-0c0d8a12bb31",
+          "query": "最近有点累，有什么推荐？",
+          "answer": "热黄酒加蜂蜜，暖胃也能暖心。酒替不了你扛事，但能陪你坐会儿。是身体累，还是心里累？",
+          "created_at": 1793537379,
           "status": "normal"
         }
       ]
     },
     {
-      "conversation_id": "aada6c2d-2797-42da-bb52-4c85ac62b7d2",
+      "conversation_id": "ec481382-c692-48ce-a03b-6f81ffe174ee",
       "name": "老板，我上次点的什么来着？",
       "messages": [
         {
-          "id": "69879315-9cec-4910-850d-7d1485ca0419",
-          "workflow_run_id": "cbc673c7-0306-4795-857a-3f11f7e340ba",
+          "id": "0208e39c-93eb-484e-90e2-f7b5e9c70729",
+          "workflow_run_id": "7d0a64c8-7d71-4873-b6dc-e9fee95f9448",
           "query": "老板，我上次点的什么来着？",
           "answer": "热黄酒，阿伟。昨晚你一个人来的——这回也一个人？",
-          "created_at": 1793448375,
+          "created_at": 1793537377,
           "status": "normal"
         }
       ]
     },
     {
-      "conversation_id": "04dbefb2-20a8-4276-b821-57ba872a2c95",
+      "conversation_id": "b2f66460-19d6-4e63-bbfd-4f2ccc21f798",
       "name": "我叫阿伟，今晚来一杯热的黄酒",
       "messages": [
         {
-          "id": "6d52c0eb-6757-4f59-b910-759009cff032",
-          "workflow_run_id": "d7987624-f6c1-4284-b597-4d41087a5814",
+          "id": "215b3983-fdb3-40b2-944e-dffa634c6684",
+          "workflow_run_id": "e7d54819-fbfa-42c8-9d65-8bde05b80e60",
           "query": "我叫阿伟，今晚来一杯热的黄酒",
-          "answer": "热黄酒，记下了。上次那杯没替你挡寒——这回也一个人？",
-          "created_at": 1793448373,
+          "answer": "热黄酒，记下了。上回那杯没替你挡寒——这回也一个人？",
+          "created_at": 1793537373,
           "status": "normal"
-        }
-      ]
-    },
-    {
-      "conversation_id": "d364adb1-00a5-4aee-be23-6b4203469e7e",
-      "name": "我叫阿伟，今晚来一杯热的黄酒",
-      "messages": [
-        {
-          "id": "54fbe3ac-40b8-460d-812c-3e167df5f1f3",
-          "workflow_run_id": "969bc015-259f-4a6b-993d-04d113b82793",
-          "query": "我叫阿伟，今晚来一杯热的黄酒",
-          "answer": "热黄酒，记下了。上次那杯没替你挡寒——这回也一个人？",
-          "created_at": 1793448365,
-          "status": "normal"
-        }
-      ]
-    },
-    {
-      "conversation_id": "290784e3-ff51-4230-b724-1c46a133db5c",
-      "name": "老板，我上次点的什么来着？",
-      "messages": [
-        {
-          "id": "2b7bbe9b-b8fb-4efb-b92b-7e8a99cb49cf",
-          "workflow_run_id": "ad6c971a-c806-4932-9806-5bb7b49ae653",
-          "query": "老板，我上次点的什么来着？",
-          "answer": "",
-          "created_at": 1793448318,
-          "status": "error"
-        }
-      ]
-    },
-    {
-      "conversation_id": "f933f067-9044-4560-84cd-223fd5b5c9b2",
-      "name": "我叫阿伟，今晚来一杯热的黄酒",
-      "messages": [
-        {
-          "id": "6f3219ef-6465-442e-8fa5-c358d1205199",
-          "workflow_run_id": "41fa7a3e-0af5-44c2-bf25-e10be5df0dd3",
-          "query": "我叫阿伟，今晚来一杯热的黄酒",
-          "answer": "",
-          "created_at": 1793448317,
-          "status": "error"
-        }
-      ]
-    },
-    {
-      "conversation_id": "9c2df275-ce96-458d-addd-437eec270410",
-      "name": "老板，我上次点的什么来着？",
-      "messages": [
-        {
-          "id": "9d15d02a-4dbd-4870-94ee-f7b5a1a11a75",
-          "workflow_run_id": "9962dad2-9fd7-4ad0-85c3-57275dc9b822",
-          "query": "老板，我上次点的什么来着？",
-          "answer": "",
-          "created_at": 1793448285,
-          "status": "error"
-        }
-      ]
-    },
-    {
-      "conversation_id": "826a5992-795f-4c7f-a639-57e1df4e9940",
-      "name": "我叫阿伟，今晚来一杯热的黄酒",
-      "messages": [
-        {
-          "id": "990ad5af-3236-4991-9135-20ef7aaded91",
-          "workflow_run_id": "7f81d229-cee7-4de2-8de4-d56160d3b4f0",
-          "query": "我叫阿伟，今晚来一杯热的黄酒",
-          "answer": "",
-          "created_at": 1793448285,
-          "status": "error"
         }
       ]
     }
